@@ -1,0 +1,9 @@
+node_modules/
+.env
+logs/
+tmp/
+*.log
+*.wav
+*.mp3
+*.pcm
+.DS_Store

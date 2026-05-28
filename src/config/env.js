@@ -19,6 +19,14 @@ function toList(value, fallback = []) {
         .filter(Boolean);
 }
 
+function toBoolean(value, fallback = false) {
+    if (value === undefined || value === null || value === "") {
+        return fallback;
+    }
+
+    return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
+}
+
 const env = {
     nodeEnv: process.env.NODE_ENV || "development",
     port: toNumber(process.env.PORT, 3001),
@@ -31,6 +39,7 @@ const env = {
     openaiSttModel: process.env.OPENAI_STT_MODEL || "gpt-4o-mini-transcribe",
     openaiTtsModel: process.env.OPENAI_TTS_MODEL || "gpt-4o-mini-tts",
     openaiTtsVoice: process.env.OPENAI_TTS_VOICE || "marin",
+    normalizeMp3WithFfmpeg: toBoolean(process.env.NORMALIZE_MP3_WITH_FFMPEG, true),
 
     voiceApiToken: process.env.VOICE_API_TOKEN || "",
     corsOrigins: toList(process.env.CORS_ORIGINS, ["*"]),

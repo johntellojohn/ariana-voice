@@ -56,6 +56,7 @@ HOST_PORT=328
 PUBLIC_BASE_URL=http://TU_IP_O_DOMINIO:328
 OPENAI_API_KEY=tu_api_key_de_openai
 VOICE_API_TOKEN=un_token_largo_y_privado
+NORMALIZE_MP3_WITH_FFMPEG=true
 ```
 
 Luego despliega:
@@ -123,6 +124,9 @@ Respuesta esperada:
 ```
 
 Abre `audio_url` para descargar o reproducir el audio.
+
+Cuando el formato es `mp3`, el servicio normaliza el archivo con `ffmpeg` para
+que el navegador pueda leer bien la duracion del audio.
 
 ## Insomnia: audio a texto
 

@@ -2,6 +2,7 @@ const fs = require("fs");
 const fsp = require("fs/promises");
 const path = require("path");
 const crypto = require("crypto");
+const { execFile } = require("child_process");
 
 const env = require("../../config/env");
 const { getOpenAIClient } = require("../openai/openai.client");
@@ -99,6 +100,58 @@ function buildAudioUrl(baseUrl, relativeUrl) {
     return `${baseUrl.replace(/\/$/, "")}${relativeUrl}`;
 }
 
+function runFfmpeg(args) {
+    return new Promise((resolve, reject) => {
+        execFile("ffmpeg", args, (error, stdout, stderr) => {
+            if (error) {
+                error.message = `${error.message}: ${stderr || stdout}`;
+                return reject(error);
+            }
+
+            return resolve();
+        });
+    });
+}
+
+async function normalizeMp3(filePath) {
+    if (!env.normalizeMp3WithFfmpeg) {
+        return false;
+    }
+
+    const normalizedPath = `${filePath}.normalized.mp3`;
+
+    try {
+        await runFfmpeg([
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            filePath,
+            "-map",
+            "0:a:0",
+            "-codec:a",
+            "libmp3lame",
+            "-b:a",
+            "128k",
+            "-ar",
+            "44100",
+            "-ac",
+            "1",
+            "-write_xing",
+            "1",
+            normalizedPath,
+        ]);
+
+        await fsp.rename(normalizedPath, filePath);
+        return true;
+    } catch (error) {
+        await fsp.unlink(normalizedPath).catch(() => {});
+        console.error("MP3 normalization failed", error);
+        return false;
+    }
+}
+
 async function synthesize(payload, options = {}) {
     const text = normalizeText(payload.text);
     const model = normalizeModel(payload.model);
@@ -125,13 +178,19 @@ async function synthesize(payload, options = {}) {
     }
 
     const response = await client.audio.speech.create(request);
-    const buffer = Buffer.from(await response.arrayBuffer());
+    let buffer = Buffer.from(await response.arrayBuffer());
     const filename = `${Date.now()}-${crypto.randomUUID()}.${format}`;
     const filePath = path.join(env.ttsOutputDir, filename);
     const relativeUrl = `/api/audio/${filename}`;
     const mimeType = TTS_MIME_TYPES[format] || "application/octet-stream";
 
     await fsp.writeFile(filePath, buffer);
+
+    const normalized = format === "mp3" ? await normalizeMp3(filePath) : false;
+
+    if (normalized) {
+        buffer = await fsp.readFile(filePath);
+    }
 
     const result = {
         provider: "openai",
@@ -144,6 +203,7 @@ async function synthesize(payload, options = {}) {
         audio_url: buildAudioUrl(options.baseUrl, relativeUrl),
         relative_url: relativeUrl,
         ai_generated: true,
+        normalized,
     };
 
     if (toBoolean(payload.return_audio_base64)) {

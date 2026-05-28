@@ -1,6 +1,5 @@
 const express = require("express");
 const fs = require("fs");
-const path = require("path");
 const cors = require("cors");
 const helmet = require("helmet");
 const compression = require("compression");
@@ -8,6 +7,7 @@ const morgan = require("morgan");
 
 const env = require("./config/env");
 const routes = require("./routes/index.routes");
+const audioRoutes = require("./modules/audio/audio.routes");
 const errorMiddleware = require("./middlewares/error.middleware");
 
 const app = express();
@@ -24,20 +24,7 @@ app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
 app.use(morgan("dev"));
 
-app.use(
-    "/api/audio",
-    express.static(path.resolve(env.ttsOutputDir), {
-        fallthrough: false,
-        setHeaders(res) {
-            res.setHeader("X-Content-Type-Options", "nosniff");
-            res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
-            res.setHeader("Access-Control-Allow-Origin", "*");
-            res.setHeader("Content-Disposition", "inline");
-            res.setHeader("Cache-Control", "no-store");
-        },
-    })
-);
-
+app.use("/api/audio", audioRoutes);
 app.use("/api", routes);
 
 app.use((req, res) => {

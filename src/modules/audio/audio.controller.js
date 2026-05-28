@@ -33,6 +33,9 @@ function getMimeType(filename) {
 }
 
 function setAudioHeaders(res, filename, mimeType) {
+    res.removeHeader("Content-Security-Policy");
+    res.removeHeader("Strict-Transport-Security");
+
     res.setHeader("Accept-Ranges", "bytes");
     res.setHeader("Content-Type", mimeType);
     res.setHeader("Content-Disposition", `inline; filename="${filename}"`);

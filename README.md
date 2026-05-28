@@ -41,6 +41,39 @@ npm run docker:up
 npm run docker:logs
 ```
 
+## Produccion con Docker
+
+El contenedor escucha internamente en `PORT`, por defecto `3001`. El puerto que
+se publica hacia internet se controla con `HOST_PORT`.
+
+Para publicar en el puerto `328`, crea el `.env` del servidor basado en
+`.env.production.example`:
+
+```env
+NODE_ENV=production
+PORT=3001
+HOST_PORT=328
+PUBLIC_BASE_URL=http://TU_IP_O_DOMINIO:328
+OPENAI_API_KEY=tu_api_key_de_openai
+VOICE_API_TOKEN=un_token_largo_y_privado
+```
+
+Luego despliega:
+
+```bash
+docker compose up -d --build
+docker compose logs -f api
+```
+
+Prueba:
+
+```http
+GET http://TU_IP_O_DOMINIO:328/api/health
+```
+
+Si Laravel no corre dentro del mismo contenedor, no uses `LARAVEL_API_URL=http://localhost`
+en produccion. Dentro de Docker, `localhost` apunta al contenedor Node.
+
 ## Autenticacion interna
 
 Si `VOICE_API_TOKEN` esta definido, envia este header en Insomnia/Laravel:

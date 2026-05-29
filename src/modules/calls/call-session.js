@@ -7,7 +7,7 @@ const env = require("../../config/env");
 const sttService = require("../stt/stt.service");
 const ttsService = require("../tts/tts.service");
 const CallVad = require("./call-vad");
-const { AudioOutput, downloadAudioToTemp } = require("./audio-output");
+const { AudioOutput } = require("./audio-output");
 const { createWavBuffer } = require("./wav.util");
 
 const { RTCAudioSink, RTCAudioSource } = wrtc.nonstandard;
@@ -209,40 +209,7 @@ class CallSession {
             : callbackResponse || {};
 
         if (reply.audio_url) {
-            this.log("agent audio_url received", {
-                audio_url: reply.audio_url,
-                connection_state: this.pc ? this.pc.connectionState : null,
-                ice_connection_state: this.pc ? this.pc.iceConnectionState : null,
-            });
-
-            const downloaded = await downloadAudioToTemp(reply.audio_url);
-
-            this.log("agent audio_url downloaded", {
-                audio_url: reply.audio_url,
-                bytes_downloaded: downloaded.bytes,
-                content_type: downloaded.contentType,
-                file_path: downloaded.filePath,
-            });
-
-            try {
-                const playback = await this.audioOutput.enqueueFile(downloaded.filePath, {
-                    source: "laravel_audio_url",
-                    audio_url: reply.audio_url,
-                });
-
-                this.log("agent audio_url playback complete", {
-                    audio_url: reply.audio_url,
-                    frames_sent: playback.framesSent,
-                    frames_queued: playback.framesQueued,
-                    pcm_bytes: playback.pcmBytes,
-                    stopped: playback.stopped,
-                    connection_state: this.pc ? this.pc.connectionState : null,
-                    ice_connection_state: this.pc ? this.pc.iceConnectionState : null,
-                });
-            } finally {
-                await fsp.unlink(downloaded.filePath).catch(() => {});
-            }
-
+            await this.playAudioUrl(reply.audio_url, "laravel_audio_url");
             return;
         }
 
@@ -261,19 +228,31 @@ class CallSession {
                 baseUrl: this.baseUrl,
             }
         );
-        const ttsPath = path.join(env.ttsOutputDir, ttsResult.filename);
+        await this.playAudioUrl(ttsResult.audio_url, "gateway_tts");
+    }
 
-        const playback = await this.audioOutput.enqueueFile(ttsPath, {
-            source: "gateway_tts",
-            audio_url: ttsResult.audio_url,
+    async playAudioUrl(audioUrl, source) {
+        this.log("agent audio_url received", {
+            audio_url: audioUrl,
+            source,
+            connection_state: this.pc ? this.pc.connectionState : null,
+            ice_connection_state: this.pc ? this.pc.iceConnectionState : null,
         });
 
-        this.log("gateway tts playback complete", {
-            audio_url: ttsResult.audio_url,
+        const playback = await this.audioOutput.enqueueAudioUrl(audioUrl, {
+            source,
+        });
+
+        this.log("agent audio_url playback complete", {
+            audio_url: audioUrl,
+            source,
             frames_sent: playback.framesSent,
             frames_queued: playback.framesQueued,
             pcm_bytes: playback.pcmBytes,
+            bytes_downloaded: playback.bytesDownloaded,
             stopped: playback.stopped,
+            connection_state: this.pc ? this.pc.connectionState : null,
+            ice_connection_state: this.pc ? this.pc.iceConnectionState : null,
         });
     }
 

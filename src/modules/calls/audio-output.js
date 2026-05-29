@@ -125,6 +125,33 @@ class AudioOutput {
         return this.enqueuePcm(pcm, metadata);
     }
 
+    async enqueueAudioUrl(audioUrl, metadata = {}) {
+        const downloaded = await downloadAudioToTemp(audioUrl);
+
+        this.log("agent audio_url downloaded", {
+            audio_url: audioUrl,
+            bytes_downloaded: downloaded.bytes,
+            content_type: downloaded.contentType,
+            file_path: downloaded.filePath,
+            metadata,
+        });
+
+        try {
+            const playback = await this.enqueueFile(downloaded.filePath, {
+                ...metadata,
+                audio_url: audioUrl,
+            });
+
+            return {
+                ...playback,
+                bytesDownloaded: downloaded.bytes,
+                contentType: downloaded.contentType,
+            };
+        } finally {
+            await fsp.unlink(downloaded.filePath).catch(() => {});
+        }
+    }
+
     tick() {
         let frame = Buffer.alloc(this.frameBytes);
         let audioBytesSent = 0;

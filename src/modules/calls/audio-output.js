@@ -167,12 +167,12 @@ class AudioOutput {
     }
 
     tick() {
-        let frame = Buffer.alloc(this.frameBytes);
+        const frame = Buffer.alloc(this.frameBytes);
         let audioBytesSent = 0;
         let frameType = "silence";
 
         if (this.buffer.length >= this.frameBytes) {
-            frame = this.buffer.subarray(0, this.frameBytes);
+            this.buffer.copy(frame, 0, 0, this.frameBytes);
             this.buffer = this.buffer.subarray(this.frameBytes);
             audioBytesSent = this.frameBytes;
             frameType = "audio";
@@ -183,9 +183,23 @@ class AudioOutput {
             frameType = "audio";
         }
 
+        const samples = bufferToExactInt16Frame(frame, this.frameSamples, this.channelCount);
+
+        if (samples.byteLength !== this.frameBytes) {
+            this.log("audio output invalid frame size", {
+                frame_type: frameType,
+                frame_bytes: frame.length,
+                samples_byte_length: samples.byteLength,
+                expected_byte_length: this.frameBytes,
+                frame_samples: this.frameSamples,
+                channel_count: this.channelCount,
+            });
+            return;
+        }
+
         try {
             this.source.onData({
-                samples: bufferToInt16Array(frame),
+                samples,
                 sampleRate: this.sampleRate,
                 bitsPerSample: 16,
                 channelCount: this.channelCount,
@@ -277,10 +291,12 @@ class AudioOutput {
     }
 }
 
-function bufferToInt16Array(buffer) {
-    const samples = new Int16Array(buffer.length / 2);
+function bufferToExactInt16Frame(buffer, frameSamples, channelCount) {
+    const sampleCount = frameSamples * channelCount;
+    const samples = new Int16Array(sampleCount);
+    const bytesToRead = Math.min(buffer.length, sampleCount * 2);
 
-    for (let index = 0; index < samples.length; index += 1) {
+    for (let index = 0; index < bytesToRead / 2; index += 1) {
         samples[index] = buffer.readInt16LE(index * 2);
     }
 

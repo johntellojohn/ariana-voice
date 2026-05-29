@@ -1,0 +1,77 @@
+const callSessionManager = require("./call-session.manager");
+const env = require("../../config/env");
+
+function getBaseUrl(req) {
+    if (env.publicBaseUrl) {
+        return env.publicBaseUrl;
+    }
+
+    return `${req.protocol}://${req.get("host")}`;
+}
+
+async function createSession(req, res, next) {
+    try {
+        const { session, answerSdp } = await callSessionManager.createSession(
+            req.body,
+            {
+                baseUrl: getBaseUrl(req),
+            }
+        );
+
+        res.json({
+            ok: true,
+            data: {
+                session_id: session.sessionId,
+                answer_sdp: answerSdp,
+            },
+        });
+    } catch (error) {
+        next(error);
+    }
+}
+
+function listSessions(req, res) {
+    res.json({
+        ok: true,
+        data: callSessionManager.listSessions(),
+    });
+}
+
+function showSession(req, res) {
+    const session = callSessionManager.getSession(req.params.session_id);
+
+    if (!session) {
+        return res.status(404).json({
+            ok: false,
+            message: "Call session not found",
+        });
+    }
+
+    return res.json({
+        ok: true,
+        data: session.snapshot(),
+    });
+}
+
+async function closeSession(req, res, next) {
+    try {
+        const session = await callSessionManager.closeSession(
+            req.params.session_id,
+            req.body.reason || "closed_by_laravel"
+        );
+
+        res.json({
+            ok: true,
+            data: session.snapshot(),
+        });
+    } catch (error) {
+        next(error);
+    }
+}
+
+module.exports = {
+    createSession,
+    listSessions,
+    showSession,
+    closeSession,
+};

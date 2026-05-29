@@ -188,3 +188,116 @@ GET http://localhost:3001/api/voice/options
 ```
 
 Devuelve modelos, voces, formatos y limite de subida configurado.
+
+## WhatsApp/Meta WebRTC Calls
+
+El servicio tambien puede crear sesiones WebRTC server-side para llamadas de
+WhatsApp/Meta. Laravel recibe el webhook de Meta con `offer_sdp`, llama a este
+servicio, recibe `answer_sdp` y luego acepta la llamada en Meta con ese answer.
+
+Endpoint:
+
+```http
+POST /api/voice/calls/session
+Authorization: Bearer un_token_largo_y_privado
+Content-Type: application/json
+```
+
+Body:
+
+```json
+{
+  "call_id": "wamid/HBg...",
+  "phone_number_id": "1084473746747071",
+  "offer_sdp": "v=0...",
+  "tenant": "sigcrm_intelho",
+  "agent_id": 1,
+  "callback_url": "https://intelho.sigcrm.pro/api/voice-calls/events"
+}
+```
+
+Respuesta:
+
+```json
+{
+  "ok": true,
+  "data": {
+    "session_id": "uuid",
+    "answer_sdp": "v=0..."
+  }
+}
+```
+
+Flujo interno:
+
+```text
+Meta offer_sdp -> Laravel -> Ariana Voice Gateway
+Gateway crea RTCPeerConnection y answer_sdp
+Laravel acepta la llamada en Meta con answer_sdp
+Gateway captura audio remoto, corta turnos por silencio/RMS y usa STT
+Gateway envia transcript a Laravel por callback_url
+Laravel responde con text o audio_url
+Gateway genera/reproduce TTS hacia la llamada WebRTC
+```
+
+Callback de transcripcion hacia Laravel:
+
+```json
+{
+  "event": "transcript",
+  "session_id": "uuid",
+  "call_id": "wamid/HBg...",
+  "sequence": 1,
+  "text": "Hola, quiero agendar una cita",
+  "audio_url": "http://sigcenter.ddns.net:328/api/audio/inbound-uuid-1.wav",
+  "tenant": "sigcrm_intelho",
+  "agent_id": 1
+}
+```
+
+Respuesta esperada de Laravel:
+
+```json
+{
+  "ok": true,
+  "data": {
+    "text": "Claro, dime para que dia deseas la cita."
+  }
+}
+```
+
+Tambien puede responder con `audio_url`; en ese caso el gateway descarga ese
+audio y lo reproduce en la llamada.
+
+Cerrar sesion desde Laravel:
+
+```http
+POST /api/voice/calls/{session_id}/close
+Authorization: Bearer un_token_largo_y_privado
+Content-Type: application/json
+```
+
+```json
+{
+  "reason": "meta_terminate"
+}
+```
+
+Variables relevantes:
+
+```env
+WEBRTC_ICE_SERVERS=[]
+WEBRTC_ICE_GATHER_TIMEOUT_MS=3000
+CALL_AUDIO_LANGUAGE=es
+CALL_TURN_RMS_THRESHOLD=0.015
+CALL_TURN_SILENCE_MS=900
+CALL_TURN_MIN_SPEECH_MS=450
+CALL_TURN_MAX_MS=15000
+```
+
+Importante para produccion: WebRTC usa ICE/UDP para media, no solo el puerto
+HTTP `328`. Si el contenedor esta en Docker bridge y no tienes TURN, Meta puede
+recibir el `answer_sdp` pero no lograr conectar media. Para llamadas reales usa
+un servidor TURN en `WEBRTC_ICE_SERVERS` o una configuracion Docker/red que
+permita candidatos UDP publicos. Las sesiones viven en memoria; si el contenedor
+se reinicia, las llamadas activas se pierden.

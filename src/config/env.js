@@ -52,7 +52,30 @@ const env = {
     ttsOutputDir:
         process.env.TTS_OUTPUT_DIR || path.join(process.cwd(), "tmp", "tts"),
 
+    webrtcIceServers: parseJson(process.env.WEBRTC_ICE_SERVERS, []),
+    webrtcIceGatherTimeoutMs: toNumber(process.env.WEBRTC_ICE_GATHER_TIMEOUT_MS, 3000),
+    callAudioLanguage: process.env.CALL_AUDIO_LANGUAGE || "es",
+    callCallbackTimeoutMs: toNumber(process.env.CALL_CALLBACK_TIMEOUT_MS, 30000),
+    callTurnRmsThreshold: toNumber(process.env.CALL_TURN_RMS_THRESHOLD, 0.015),
+    callTurnSilenceMs: toNumber(process.env.CALL_TURN_SILENCE_MS, 900),
+    callTurnMinSpeechMs: toNumber(process.env.CALL_TURN_MIN_SPEECH_MS, 450),
+    callTurnMaxMs: toNumber(process.env.CALL_TURN_MAX_MS, 15000),
+    callSilenceFrameMs: toNumber(process.env.CALL_SILENCE_FRAME_MS, 10),
+
     logLevel: process.env.LOG_LEVEL || "info",
 };
 
 module.exports = env;
+
+function parseJson(value, fallback) {
+    if (!value) {
+        return fallback;
+    }
+
+    try {
+        return JSON.parse(value);
+    } catch (error) {
+        console.warn(`Invalid JSON env value: ${error.message}`);
+        return fallback;
+    }
+}

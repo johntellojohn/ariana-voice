@@ -1,0 +1,11 @@
+const express = require("express");
+const callsController = require("./calls.controller");
+
+const router = express.Router();
+
+router.post("/session", callsController.createSession);
+router.get("/sessions", callsController.listSessions);
+router.get("/:session_id", callsController.showSession);
+router.post("/:session_id/close", callsController.closeSession);
+
+module.exports = router;

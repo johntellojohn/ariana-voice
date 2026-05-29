@@ -197,7 +197,7 @@ async function removeFile(filePath) {
     await fsp.unlink(filePath).catch(() => {});
 }
 
-async function transcribe({ file, rawAudio, body = {} }) {
+async function transcribe({ file, rawAudio, body = {}, cleanup = true }) {
     const audioFile = file || (await fileFromRawAudio(rawAudio)) || (await fileFromBase64(body));
 
     if (!audioFile) {
@@ -245,7 +245,9 @@ async function transcribe({ file, rawAudio, body = {} }) {
             },
         };
     } finally {
-        await removeFile(audioFile.path);
+        if (cleanup) {
+            await removeFile(audioFile.path);
+        }
     }
 }
 

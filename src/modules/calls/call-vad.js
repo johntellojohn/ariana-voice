@@ -16,6 +16,8 @@ class CallVad {
         this.trailingSilenceMs = 0;
         this.sampleRate = 48000;
         this.channelCount = 1;
+        this.lastLevel = 0;
+        this.lastHasSpeech = false;
     }
 
     push(data) {
@@ -24,6 +26,9 @@ class CallVad {
         const channelCount = data.channelCount || 1;
         const durationMs = (data.samples.length / channelCount / sampleRate) * 1000;
         const hasSpeech = level >= this.threshold;
+
+        this.lastLevel = level;
+        this.lastHasSpeech = hasSpeech;
 
         if (!this.active && !hasSpeech) {
             return null;

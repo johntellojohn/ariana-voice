@@ -12,6 +12,10 @@ class AudioOutput {
         this.logger = options.logger || null;
         this.frameSamples = Math.round((this.sampleRate * this.frameMs) / 1000);
         this.frameBytes = this.frameSamples * this.channelCount * 2;
+        this.silenceLogEveryFrames =
+            options.silenceLogEveryFrames === undefined
+                ? 6000
+                : Number(options.silenceLogEveryFrames);
         this.buffer = Buffer.alloc(0);
         this.timer = null;
         this.playbackJobs = [];
@@ -32,6 +36,7 @@ class AudioOutput {
             frame_ms: this.frameMs,
             frame_samples: this.frameSamples,
             frame_bytes: this.frameBytes,
+            silence_log_every_frames: this.silenceLogEveryFrames,
         });
     }
 
@@ -219,13 +224,21 @@ class AudioOutput {
         } else {
             this.silenceFramesSent += 1;
 
-            if (this.silenceFramesSent === 1 || this.silenceFramesSent % 500 === 0) {
+            if (
+                this.silenceLogEveryFrames > 0 &&
+                (this.silenceFramesSent === 1 ||
+                    this.silenceFramesSent % this.silenceLogEveryFrames === 0)
+            ) {
                 this.log("silence pump alive", {
                     silence_frames_sent: this.silenceFramesSent,
                     audio_frames_sent: this.audioFramesSent,
                 });
             }
         }
+    }
+
+    hasPendingAudio() {
+        return this.buffer.length > 0 || this.playbackJobs.length > 0;
     }
 
     padToFrameBoundary(pcmBuffer) {

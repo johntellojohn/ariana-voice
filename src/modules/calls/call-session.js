@@ -26,6 +26,14 @@ class CallSession {
         this.language = resolveCallLanguage(payload.language);
         this.createdAt = new Date();
         this.closedAt = null;
+        this.lastActivityAt = Date.now();
+        this.lastActivityType = "created";
+        this.lastSpeechAt = null;
+        this.lastPlaybackAt = null;
+        this.lifecycleTimer = null;
+        this.outputActive = false;
+        this.inputMutedUntil = 0;
+        this.lastInputMutedLogAt = 0;
         this.sequence = 0;
         this.status = "created";
         this.turnQueue = [];
@@ -94,6 +102,7 @@ class CallSession {
         this.audioSource = new RTCAudioSource();
         this.audioOutput = new AudioOutput(this.audioSource, {
             frameMs: env.callSilenceFrameMs,
+            silenceLogEveryFrames: env.callSilenceLogEveryFrames,
             logger: (message, data) => this.log(message, data),
         });
 
@@ -135,6 +144,7 @@ class CallSession {
             transceivers: this.getTransceiverSnapshot(),
         });
         this.audioOutput.start();
+        this.startLifecycleWatch();
     }
 
     findAudioTransceiver() {
@@ -162,6 +172,7 @@ class CallSession {
         sink.ondata = (data) => this.handleAudioData(data);
         this.sinks.push(sink);
         this.status = "connected";
+        this.markActivity("remote_track_attached");
         this.log("remote audio track attached", {
             track_id: track.id,
             ready_state: track.readyState,
@@ -179,9 +190,21 @@ class CallSession {
             return;
         }
 
+        if (this.shouldIgnoreInboundAudio()) {
+            this.vad.reset();
+            this.logInputMuted();
+            return;
+        }
+
         const turn = this.vad.push(data);
 
+        if (this.vad.lastHasSpeech) {
+            this.markActivity("remote_speech");
+            this.lastSpeechAt = this.lastActivityAt;
+        }
+
         if (turn) {
+            this.markActivity("turn_detected");
             this.turnQueue.push(turn);
             this.processTurnQueue().catch((error) => {
                 console.error("Error processing call turn", error);
@@ -314,6 +337,7 @@ class CallSession {
     }
 
     async playAudioUrl(audioUrl, source) {
+        this.markActivity("agent_audio_received");
         this.log("agent audio_url received", {
             audio_url: audioUrl,
             source,
@@ -324,9 +348,20 @@ class CallSession {
 
         await this.waitForPlaybackReady();
 
-        const playback = await this.audioOutput.enqueueAudioUrl(audioUrl, {
-            source,
-        });
+        this.outputActive = true;
+
+        let playback;
+
+        try {
+            playback = await this.audioOutput.enqueueAudioUrl(audioUrl, {
+                source,
+            });
+        } finally {
+            this.outputActive = false;
+            this.inputMutedUntil = Date.now() + env.callPostPlaybackMuteMs;
+            this.markActivity("agent_audio_played");
+            this.lastPlaybackAt = this.lastActivityAt;
+        }
 
         this.log("agent audio_url playback complete", {
             audio_url: audioUrl,
@@ -425,6 +460,7 @@ class CallSession {
 
         this.closedAt = new Date();
         this.status = "closed";
+        this.stopLifecycleWatch();
 
         const finalTurn = this.vad.flush();
 
@@ -513,6 +549,18 @@ class CallSession {
             status: this.status,
             sequence: this.sequence,
             language: this.language,
+            last_activity_at: new Date(this.lastActivityAt).toISOString(),
+            last_activity_type: this.lastActivityType,
+            last_speech_at: this.lastSpeechAt
+                ? new Date(this.lastSpeechAt).toISOString()
+                : null,
+            last_playback_at: this.lastPlaybackAt
+                ? new Date(this.lastPlaybackAt).toISOString()
+                : null,
+            output_active: this.outputActive,
+            input_muted_until: this.inputMutedUntil
+                ? new Date(this.inputMutedUntil).toISOString()
+                : null,
             created_at: this.createdAt.toISOString(),
             closed_at: this.closedAt ? this.closedAt.toISOString() : null,
             callback_url: this.callbackUrl,
@@ -550,6 +598,97 @@ class CallSession {
             `[call:${this.sessionId || "pending"} call_id:${this.callId || "unknown"}] ${message}`,
             JSON.stringify(data)
         );
+    }
+
+    startLifecycleWatch() {
+        if (this.lifecycleTimer) {
+            return;
+        }
+
+        this.lifecycleTimer = setInterval(() => {
+            this.checkLifecycle();
+        }, 5000);
+
+        if (this.lifecycleTimer.unref) {
+            this.lifecycleTimer.unref();
+        }
+
+        this.log("call lifecycle watch started", {
+            idle_timeout_ms: env.callIdleTimeoutMs,
+            max_duration_ms: env.callMaxDurationMs,
+        });
+    }
+
+    stopLifecycleWatch() {
+        if (!this.lifecycleTimer) {
+            return;
+        }
+
+        clearInterval(this.lifecycleTimer);
+        this.lifecycleTimer = null;
+    }
+
+    markActivity(type) {
+        this.lastActivityAt = Date.now();
+        this.lastActivityType = type;
+    }
+
+    checkLifecycle() {
+        if (this.closedAt) {
+            return;
+        }
+
+        const now = Date.now();
+        const ageMs = now - this.createdAt.getTime();
+        const idleMs = now - this.lastActivityAt;
+        const hasPendingAudio = this.audioOutput && this.audioOutput.hasPendingAudio();
+        const isBusy = this.processingTurn || hasPendingAudio || this.outputActive;
+
+        if (env.callMaxDurationMs > 0 && ageMs >= env.callMaxDurationMs) {
+            this.log("call max duration reached", {
+                age_ms: ageMs,
+                max_duration_ms: env.callMaxDurationMs,
+                connection_state: this.pc ? this.pc.connectionState : null,
+                ice_connection_state: this.pc ? this.pc.iceConnectionState : null,
+            });
+            this.close("call_max_duration").catch((error) => {
+                console.error("Error closing max duration call", error);
+            });
+            return;
+        }
+
+        if (env.callIdleTimeoutMs > 0 && !isBusy && idleMs >= env.callIdleTimeoutMs) {
+            this.log("call idle timeout reached", {
+                idle_ms: idleMs,
+                idle_timeout_ms: env.callIdleTimeoutMs,
+                last_activity_type: this.lastActivityType,
+                connection_state: this.pc ? this.pc.connectionState : null,
+                ice_connection_state: this.pc ? this.pc.iceConnectionState : null,
+            });
+            this.close("call_idle_timeout").catch((error) => {
+                console.error("Error closing idle call", error);
+            });
+        }
+    }
+
+    shouldIgnoreInboundAudio() {
+        return this.outputActive || Date.now() < this.inputMutedUntil;
+    }
+
+    logInputMuted() {
+        const now = Date.now();
+
+        if (now - this.lastInputMutedLogAt < 5000) {
+            return;
+        }
+
+        this.lastInputMutedLogAt = now;
+        this.log("inbound audio ignored during agent playback", {
+            output_active: this.outputActive,
+            input_muted_until: this.inputMutedUntil
+                ? new Date(this.inputMutedUntil).toISOString()
+                : null,
+        });
     }
 }
 

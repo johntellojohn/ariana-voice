@@ -66,6 +66,10 @@ const env = {
     callTurnMinSpeechMs: toNumber(process.env.CALL_TURN_MIN_SPEECH_MS, 450),
     callTurnMaxMs: toNumber(process.env.CALL_TURN_MAX_MS, 15000),
     callSilenceFrameMs: toNumber(process.env.CALL_SILENCE_FRAME_MS, 10),
+    callSilenceLogEveryFrames: toNumber(process.env.CALL_SILENCE_LOG_EVERY_FRAMES, 6000),
+    callIdleTimeoutMs: toNumber(process.env.CALL_IDLE_TIMEOUT_MS, 60000),
+    callMaxDurationMs: toNumber(process.env.CALL_MAX_DURATION_MS, 1800000),
+    callPostPlaybackMuteMs: toNumber(process.env.CALL_POST_PLAYBACK_MUTE_MS, 800),
     callLogSdp: toBoolean(process.env.CALL_LOG_SDP, true),
     callPlaybackWaitForIceMs: toNumber(process.env.CALL_PLAYBACK_WAIT_FOR_ICE_MS, 5000),
 

@@ -16,6 +16,8 @@ class AudioOutput {
         this.timer = null;
         this.playbackJobs = [];
         this.playbackJobId = 0;
+        this.silenceFramesSent = 0;
+        this.audioFramesSent = 0;
     }
 
     start() {
@@ -24,6 +26,13 @@ class AudioOutput {
         }
 
         this.timer = setInterval(() => this.tick(), this.frameMs);
+        this.log("silence pump started", {
+            sample_rate: this.sampleRate,
+            channel_count: this.channelCount,
+            frame_ms: this.frameMs,
+            frame_samples: this.frameSamples,
+            frame_bytes: this.frameBytes,
+        });
     }
 
     stop() {
@@ -33,6 +42,11 @@ class AudioOutput {
         }
 
         this.buffer = Buffer.alloc(0);
+        this.log("silence pump stopped", {
+            silence_frames_sent: this.silenceFramesSent,
+            audio_frames_sent: this.audioFramesSent,
+            pending_jobs: this.playbackJobs.length,
+        });
 
         while (this.playbackJobs.length) {
             const job = this.playbackJobs.shift();
@@ -155,33 +169,48 @@ class AudioOutput {
     tick() {
         let frame = Buffer.alloc(this.frameBytes);
         let audioBytesSent = 0;
+        let frameType = "silence";
 
         if (this.buffer.length >= this.frameBytes) {
             frame = this.buffer.subarray(0, this.frameBytes);
             this.buffer = this.buffer.subarray(this.frameBytes);
             audioBytesSent = this.frameBytes;
+            frameType = "audio";
         } else if (this.buffer.length > 0) {
             audioBytesSent = this.buffer.length;
             this.buffer.copy(frame);
             this.buffer = Buffer.alloc(0);
+            frameType = "audio";
         }
 
-        const samples = new Int16Array(
-            frame.buffer,
-            frame.byteOffset,
-            frame.byteLength / 2
-        );
-
-        this.source.onData({
-            samples,
-            sampleRate: this.sampleRate,
-            bitsPerSample: 16,
-            channelCount: this.channelCount,
-            numberOfFrames: this.frameSamples,
-        });
+        try {
+            this.source.onData({
+                samples: bufferToInt16Array(frame),
+                sampleRate: this.sampleRate,
+                bitsPerSample: 16,
+                channelCount: this.channelCount,
+                numberOfFrames: this.frameSamples,
+            });
+        } catch (error) {
+            this.log("audio output onData error", {
+                error: error.message,
+                frame_type: frameType,
+            });
+            return;
+        }
 
         if (audioBytesSent > 0) {
+            this.audioFramesSent += 1;
             this.markPlaybackFrameSent(audioBytesSent);
+        } else {
+            this.silenceFramesSent += 1;
+
+            if (this.silenceFramesSent === 1 || this.silenceFramesSent % 500 === 0) {
+                this.log("silence pump alive", {
+                    silence_frames_sent: this.silenceFramesSent,
+                    audio_frames_sent: this.audioFramesSent,
+                });
+            }
         }
     }
 
@@ -246,6 +275,16 @@ class AudioOutput {
             this.logger(message, data);
         }
     }
+}
+
+function bufferToInt16Array(buffer) {
+    const samples = new Int16Array(buffer.length / 2);
+
+    for (let index = 0; index < samples.length; index += 1) {
+        samples[index] = buffer.readInt16LE(index * 2);
+    }
+
+    return samples;
 }
 
 function convertToPcm(filePath, options = {}) {

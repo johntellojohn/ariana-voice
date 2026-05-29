@@ -50,22 +50,6 @@ class CallSession {
             iceServers: env.webrtcIceServers,
         });
 
-        this.audioSource = new RTCAudioSource();
-        this.audioOutput = new AudioOutput(this.audioSource, {
-            frameMs: env.callSilenceFrameMs,
-            logger: (message, data) => this.log(message, data),
-        });
-
-        const outboundTrack = this.audioSource.createTrack();
-        this.outboundTrack = outboundTrack;
-        this.pc.addTrack(outboundTrack);
-        this.log("local audio track added before answer", {
-            track_id: outboundTrack.id,
-            kind: outboundTrack.kind,
-            ready_state: outboundTrack.readyState,
-        });
-        this.audioOutput.start();
-
         this.pc.ontrack = (event) => this.handleTrack(event.track);
         this.pc.onconnectionstatechange = () => this.handleConnectionState();
         this.pc.oniceconnectionstatechange = () => this.handleIceConnectionState();
@@ -76,20 +60,95 @@ class CallSession {
                 sdp: this.offerSdp,
             })
         );
+        this.log("remote offer audio sdp", {
+            audio_sections: extractAudioSdpSummary(this.offerSdp),
+        });
+
+        await this.setupOutboundAudio();
 
         const answer = await this.pc.createAnswer();
         await this.pc.setLocalDescription(answer);
         await waitForIceGatheringComplete(this.pc, env.webrtcIceGatherTimeoutMs);
 
         this.status = "answer_ready";
+        const answerSdpSummary = extractAudioSdpSummary(this.pc.localDescription.sdp);
         this.log("answer_sdp ready", {
             answer_sdp_bytes: this.pc.localDescription.sdp.length,
+            audio_sections: answerSdpSummary,
+            senders: this.getSenderSnapshot(),
             connection_state: this.pc.connectionState,
             ice_connection_state: this.pc.iceConnectionState,
             ice_gathering_state: this.pc.iceGatheringState,
         });
 
+        if (env.callLogSdp) {
+            this.log("answer_sdp full", {
+                sdp: this.pc.localDescription.sdp,
+            });
+        }
+
         return this.pc.localDescription.sdp;
+    }
+
+    async setupOutboundAudio() {
+        this.audioSource = new RTCAudioSource();
+        this.audioOutput = new AudioOutput(this.audioSource, {
+            frameMs: env.callSilenceFrameMs,
+            logger: (message, data) => this.log(message, data),
+        });
+
+        const outboundTrack = this.audioSource.createTrack();
+        this.outboundTrack = outboundTrack;
+
+        const audioTransceiver = this.findAudioTransceiver();
+
+        if (audioTransceiver && audioTransceiver.sender) {
+            await audioTransceiver.sender.replaceTrack(outboundTrack);
+
+            try {
+                audioTransceiver.direction = "sendrecv";
+            } catch (error) {
+                this.log("could not force audio transceiver direction", {
+                    error: error.message,
+                });
+            }
+
+            this.log("local audio track attached to offered transceiver before answer", {
+                track_id: outboundTrack.id,
+                kind: outboundTrack.kind,
+                ready_state: outboundTrack.readyState,
+                transceiver_mid: audioTransceiver.mid,
+                transceiver_direction: audioTransceiver.direction,
+                sender_track: describeTrack(audioTransceiver.sender.track),
+            });
+        } else {
+            this.pc.addTrack(outboundTrack);
+            this.log("local audio track added before answer", {
+                track_id: outboundTrack.id,
+                kind: outboundTrack.kind,
+                ready_state: outboundTrack.readyState,
+            });
+        }
+
+        this.log("audio senders after local track setup", {
+            senders: this.getSenderSnapshot(),
+            transceivers: this.getTransceiverSnapshot(),
+        });
+        this.audioOutput.start();
+    }
+
+    findAudioTransceiver() {
+        return this.pc
+            .getTransceivers()
+            .find((transceiver) => {
+                const receiverTrack = transceiver.receiver && transceiver.receiver.track;
+                const senderTrack = transceiver.sender && transceiver.sender.track;
+
+                return (
+                    (receiverTrack && receiverTrack.kind === "audio") ||
+                    (senderTrack && senderTrack.kind === "audio")
+                );
+            });
     }
 
     handleTrack(track) {
@@ -204,9 +263,11 @@ class CallSession {
     }
 
     async handleAgentResponse(callbackResponse) {
-        const reply = callbackResponse && callbackResponse.data
-            ? callbackResponse.data
-            : callbackResponse || {};
+        this.log("agent callback response received", {
+            response: callbackResponse,
+        });
+
+        const reply = extractAgentReply(callbackResponse);
 
         if (reply.audio_url) {
             await this.playAudioUrl(reply.audio_url, "laravel_audio_url");
@@ -235,9 +296,12 @@ class CallSession {
         this.log("agent audio_url received", {
             audio_url: audioUrl,
             source,
+            senders: this.getSenderSnapshot(),
             connection_state: this.pc ? this.pc.connectionState : null,
             ice_connection_state: this.pc ? this.pc.iceConnectionState : null,
         });
+
+        await this.waitForPlaybackReady();
 
         const playback = await this.audioOutput.enqueueAudioUrl(audioUrl, {
             source,
@@ -274,6 +338,63 @@ class CallSession {
         });
 
         return response.data;
+    }
+
+    waitForPlaybackReady() {
+        if (this.isIceReady()) {
+            return Promise.resolve(true);
+        }
+
+        this.log("waiting for ICE before playback", {
+            connection_state: this.pc ? this.pc.connectionState : null,
+            ice_connection_state: this.pc ? this.pc.iceConnectionState : null,
+            timeout_ms: env.callPlaybackWaitForIceMs,
+        });
+
+        return new Promise((resolve) => {
+            const timeout = setTimeout(() => {
+                cleanup();
+                this.log("playback continuing without connected ICE", {
+                    connection_state: this.pc ? this.pc.connectionState : null,
+                    ice_connection_state: this.pc ? this.pc.iceConnectionState : null,
+                });
+                resolve(false);
+            }, env.callPlaybackWaitForIceMs);
+
+            const cleanup = () => {
+                clearTimeout(timeout);
+
+                if (this.pc) {
+                    this.pc.removeEventListener("connectionstatechange", onStateChange);
+                    this.pc.removeEventListener("iceconnectionstatechange", onStateChange);
+                }
+            };
+
+            const onStateChange = () => {
+                if (this.isIceReady()) {
+                    cleanup();
+                    this.log("ICE ready for playback", {
+                        connection_state: this.pc ? this.pc.connectionState : null,
+                        ice_connection_state: this.pc ? this.pc.iceConnectionState : null,
+                    });
+                    resolve(true);
+                }
+            };
+
+            this.pc.addEventListener("connectionstatechange", onStateChange);
+            this.pc.addEventListener("iceconnectionstatechange", onStateChange);
+        });
+    }
+
+    isIceReady() {
+        if (!this.pc) {
+            return false;
+        }
+
+        return (
+            this.pc.connectionState === "connected" ||
+            ["connected", "completed"].includes(this.pc.iceConnectionState)
+        );
     }
 
     async close(reason = "closed") {
@@ -376,6 +497,32 @@ class CallSession {
         };
     }
 
+    getSenderSnapshot() {
+        if (!this.pc) {
+            return [];
+        }
+
+        return this.pc.getSenders().map((sender, index) => ({
+            index,
+            track: describeTrack(sender.track),
+        }));
+    }
+
+    getTransceiverSnapshot() {
+        if (!this.pc) {
+            return [];
+        }
+
+        return this.pc.getTransceivers().map((transceiver, index) => ({
+            index,
+            mid: transceiver.mid,
+            direction: transceiver.direction,
+            current_direction: transceiver.currentDirection,
+            sender_track: describeTrack(transceiver.sender && transceiver.sender.track),
+            receiver_track: describeTrack(transceiver.receiver && transceiver.receiver.track),
+        }));
+    }
+
     log(message, data = {}) {
         console.log(
             `[call:${this.sessionId || "pending"} call_id:${this.callId || "unknown"}] ${message}`,
@@ -406,6 +553,84 @@ function waitForIceGatheringComplete(pc, timeoutMs) {
 
         pc.addEventListener("icegatheringstatechange", onStateChange);
     });
+}
+
+function extractAgentReply(response) {
+    const candidates = [
+        response && response.data,
+        response && response.data && response.data.data,
+        response,
+    ];
+
+    return (
+        candidates.find((candidate) => {
+            return (
+                candidate &&
+                typeof candidate === "object" &&
+                (candidate.audio_url || candidate.text)
+            );
+        }) || {}
+    );
+}
+
+function describeTrack(track) {
+    if (!track) {
+        return null;
+    }
+
+    return {
+        id: track.id,
+        kind: track.kind,
+        enabled: track.enabled,
+        ready_state: track.readyState,
+    };
+}
+
+function extractAudioSdpSummary(sdp) {
+    return getSdpMediaSections(sdp)
+        .filter((section) => section.startsWith("m=audio"))
+        .map((section) => ({
+            direction: getSdpDirection(section),
+            mid: getSdpAttribute(section, "mid"),
+            setup: getSdpAttribute(section, "setup"),
+            codecs: getSdpCodecs(section),
+            raw: section,
+        }));
+}
+
+function getSdpMediaSections(sdp) {
+    const normalized = String(sdp || "").replace(/\r\n/g, "\n");
+    const parts = normalized.split("\nm=");
+
+    return parts
+        .slice(1)
+        .map((part) => `m=${part.trim()}`);
+}
+
+function getSdpDirection(section) {
+    const match = section.match(/^a=(sendrecv|sendonly|recvonly|inactive)$/m);
+
+    return match ? match[1] : "not_set";
+}
+
+function getSdpAttribute(section, attribute) {
+    const match = section.match(new RegExp(`^a=${attribute}:(.+)$`, "m"));
+
+    return match ? match[1].trim() : null;
+}
+
+function getSdpCodecs(section) {
+    const codecs = [];
+    const rtpmapMatches = section.matchAll(/^a=rtpmap:(\d+)\s+(.+)$/gm);
+
+    for (const match of rtpmapMatches) {
+        codecs.push({
+            payload_type: match[1],
+            codec: match[2],
+        });
+    }
+
+    return codecs;
 }
 
 module.exports = CallSession;

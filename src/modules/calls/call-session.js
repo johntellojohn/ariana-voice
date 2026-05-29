@@ -35,6 +35,7 @@ class CallSession {
         this.pc = null;
         this.audioSource = null;
         this.audioOutput = null;
+        this.outboundTrack = null;
         this.vad = new CallVad({
             threshold: env.callTurnRmsThreshold,
             silenceMs: env.callTurnSilenceMs,
@@ -52,10 +53,17 @@ class CallSession {
         this.audioSource = new RTCAudioSource();
         this.audioOutput = new AudioOutput(this.audioSource, {
             frameMs: env.callSilenceFrameMs,
+            logger: (message, data) => this.log(message, data),
         });
 
         const outboundTrack = this.audioSource.createTrack();
+        this.outboundTrack = outboundTrack;
         this.pc.addTrack(outboundTrack);
+        this.log("local audio track added before answer", {
+            track_id: outboundTrack.id,
+            kind: outboundTrack.kind,
+            ready_state: outboundTrack.readyState,
+        });
         this.audioOutput.start();
 
         this.pc.ontrack = (event) => this.handleTrack(event.track);
@@ -74,6 +82,12 @@ class CallSession {
         await waitForIceGatheringComplete(this.pc, env.webrtcIceGatherTimeoutMs);
 
         this.status = "answer_ready";
+        this.log("answer_sdp ready", {
+            answer_sdp_bytes: this.pc.localDescription.sdp.length,
+            connection_state: this.pc.connectionState,
+            ice_connection_state: this.pc.iceConnectionState,
+            ice_gathering_state: this.pc.iceGatheringState,
+        });
 
         return this.pc.localDescription.sdp;
     }
@@ -89,6 +103,10 @@ class CallSession {
         sink.ondata = (data) => this.handleAudioData(data);
         this.sinks.push(sink);
         this.status = "connected";
+        this.log("remote audio track attached", {
+            track_id: track.id,
+            ready_state: track.readyState,
+        });
 
         track.onended = () => {
             this.close("remote_track_ended").catch((error) => {
@@ -191,12 +209,38 @@ class CallSession {
             : callbackResponse || {};
 
         if (reply.audio_url) {
-            const tempFile = await downloadAudioToTemp(reply.audio_url);
+            this.log("agent audio_url received", {
+                audio_url: reply.audio_url,
+                connection_state: this.pc ? this.pc.connectionState : null,
+                ice_connection_state: this.pc ? this.pc.iceConnectionState : null,
+            });
+
+            const downloaded = await downloadAudioToTemp(reply.audio_url);
+
+            this.log("agent audio_url downloaded", {
+                audio_url: reply.audio_url,
+                bytes_downloaded: downloaded.bytes,
+                content_type: downloaded.contentType,
+                file_path: downloaded.filePath,
+            });
 
             try {
-                await this.audioOutput.enqueueFile(tempFile);
+                const playback = await this.audioOutput.enqueueFile(downloaded.filePath, {
+                    source: "laravel_audio_url",
+                    audio_url: reply.audio_url,
+                });
+
+                this.log("agent audio_url playback complete", {
+                    audio_url: reply.audio_url,
+                    frames_sent: playback.framesSent,
+                    frames_queued: playback.framesQueued,
+                    pcm_bytes: playback.pcmBytes,
+                    stopped: playback.stopped,
+                    connection_state: this.pc ? this.pc.connectionState : null,
+                    ice_connection_state: this.pc ? this.pc.iceConnectionState : null,
+                });
             } finally {
-                await fsp.unlink(tempFile).catch(() => {});
+                await fsp.unlink(downloaded.filePath).catch(() => {});
             }
 
             return;
@@ -219,7 +263,18 @@ class CallSession {
         );
         const ttsPath = path.join(env.ttsOutputDir, ttsResult.filename);
 
-        await this.audioOutput.enqueueFile(ttsPath);
+        const playback = await this.audioOutput.enqueueFile(ttsPath, {
+            source: "gateway_tts",
+            audio_url: ttsResult.audio_url,
+        });
+
+        this.log("gateway tts playback complete", {
+            audio_url: ttsResult.audio_url,
+            frames_sent: playback.framesSent,
+            frames_queued: playback.framesQueued,
+            pcm_bytes: playback.pcmBytes,
+            stopped: playback.stopped,
+        });
     }
 
     async sendCallback(payload) {
@@ -290,6 +345,11 @@ class CallSession {
     handleConnectionState() {
         const state = this.pc.connectionState;
 
+        this.log("peer connection state changed", {
+            connection_state: state,
+            ice_connection_state: this.pc.iceConnectionState,
+        });
+
         if (["failed", "disconnected", "closed"].includes(state)) {
             this.close(`peer_connection_${state}`).catch((error) => {
                 console.error("Error closing peer connection", error);
@@ -299,6 +359,11 @@ class CallSession {
 
     handleIceConnectionState() {
         const state = this.pc.iceConnectionState;
+
+        this.log("ice connection state changed", {
+            connection_state: this.pc.connectionState,
+            ice_connection_state: state,
+        });
 
         if (["failed", "disconnected", "closed"].includes(state)) {
             this.close(`ice_${state}`).catch((error) => {
@@ -330,6 +395,13 @@ class CallSession {
             closed_at: this.closedAt ? this.closedAt.toISOString() : null,
             callback_url: this.callbackUrl,
         };
+    }
+
+    log(message, data = {}) {
+        console.log(
+            `[call:${this.sessionId || "pending"} call_id:${this.callId || "unknown"}] ${message}`,
+            JSON.stringify(data)
+        );
     }
 }
 

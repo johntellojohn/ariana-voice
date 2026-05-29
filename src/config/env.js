@@ -55,6 +55,11 @@ const env = {
     webrtcIceServers: parseJson(process.env.WEBRTC_ICE_SERVERS, []),
     webrtcIceGatherTimeoutMs: toNumber(process.env.WEBRTC_ICE_GATHER_TIMEOUT_MS, 3000),
     callAudioLanguage: process.env.CALL_AUDIO_LANGUAGE || "es",
+    callAllowLanguageOverride: toBoolean(process.env.CALL_ALLOW_LANGUAGE_OVERRIDE, false),
+    callSttPrompt:
+        process.env.CALL_STT_PROMPT ||
+        "Transcribe audio de una llamada de WhatsApp en espanol latino. No traduzcas al ingles. Conserva palabras cortas comunes como hola, donde, vale, gracias, cita y agenda. Si el audio no es claro, devuelve la mejor transcripcion en espanol.",
+    callSttTemperature: toNumber(process.env.CALL_STT_TEMPERATURE, 0),
     callCallbackTimeoutMs: toNumber(process.env.CALL_CALLBACK_TIMEOUT_MS, 30000),
     callTurnRmsThreshold: toNumber(process.env.CALL_TURN_RMS_THRESHOLD, 0.015),
     callTurnSilenceMs: toNumber(process.env.CALL_TURN_SILENCE_MS, 900),

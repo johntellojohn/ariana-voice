@@ -23,7 +23,7 @@ class CallSession {
         this.tenant = payload.tenant || null;
         this.agentId = payload.agent_id || null;
         this.callbackUrl = payload.callback_url || null;
-        this.language = payload.language || env.callAudioLanguage;
+        this.language = resolveCallLanguage(payload.language);
         this.createdAt = new Date();
         this.closedAt = null;
         this.sequence = 0;
@@ -211,6 +211,21 @@ class CallSession {
         this.sequence = sequence;
 
         const inbound = await this.persistInboundTurn(turn, sequence);
+        const sttBody = {
+            language: this.language,
+            temperature: env.callSttTemperature,
+            prompt: env.callSttPrompt,
+        };
+
+        this.log("call turn transcribing", {
+            sequence,
+            language: sttBody.language,
+            duration_ms: turn.durationMs,
+            audio_bytes: inbound.size,
+            prompt_enabled: Boolean(sttBody.prompt),
+            temperature: sttBody.temperature,
+        });
+
         const transcription = await sttService.transcribe({
             file: {
                 path: inbound.filePath,
@@ -218,10 +233,16 @@ class CallSession {
                 mimetype: "audio/wav",
                 size: inbound.size,
             },
-            body: {
-                language: this.language,
-            },
+            body: sttBody,
             cleanup: false,
+        });
+
+        this.log("call turn transcribed", {
+            sequence,
+            language: sttBody.language,
+            model: transcription.model,
+            text: transcription.text,
+            duration_ms: turn.durationMs,
         });
 
         if (!transcription.text) {
@@ -491,6 +512,7 @@ class CallSession {
             agent_id: this.agentId,
             status: this.status,
             sequence: this.sequence,
+            language: this.language,
             created_at: this.createdAt.toISOString(),
             closed_at: this.closedAt ? this.closedAt.toISOString() : null,
             callback_url: this.callbackUrl,
@@ -529,6 +551,14 @@ class CallSession {
             JSON.stringify(data)
         );
     }
+}
+
+function resolveCallLanguage(payloadLanguage) {
+    if (env.callAllowLanguageOverride && payloadLanguage) {
+        return payloadLanguage;
+    }
+
+    return env.callAudioLanguage || payloadLanguage || "es";
 }
 
 function waitForIceGatheringComplete(pc, timeoutMs) {

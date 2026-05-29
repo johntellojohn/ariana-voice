@@ -289,6 +289,9 @@ Variables relevantes:
 WEBRTC_ICE_SERVERS=[]
 WEBRTC_ICE_GATHER_TIMEOUT_MS=3000
 CALL_AUDIO_LANGUAGE=es
+CALL_ALLOW_LANGUAGE_OVERRIDE=false
+CALL_STT_TEMPERATURE=0
+CALL_STT_PROMPT=Transcribe audio de una llamada de WhatsApp en espanol latino. No traduzcas al ingles. Conserva palabras cortas comunes como hola, donde, vale, gracias, cita y agenda. Si el audio no es claro, devuelve la mejor transcripcion en espanol.
 CALL_TURN_RMS_THRESHOLD=0.015
 CALL_TURN_SILENCE_MS=900
 CALL_TURN_MIN_SPEECH_MS=450

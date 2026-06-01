@@ -23,6 +23,10 @@ class CallSession {
         this.tenant = payload.tenant || null;
         this.agentId = payload.agent_id || null;
         this.callbackUrl = payload.callback_url || null;
+        this.initialGreeting = normalizeInitialGreeting(payload.initial_greeting);
+        this.initialGreetingPending = Boolean(this.initialGreeting);
+        this.initialGreetingPlaybackStarted = false;
+        this.initialGreetingPlayed = false;
         this.language = resolveCallLanguage(payload.language);
         this.createdAt = new Date();
         this.closedAt = null;
@@ -177,6 +181,7 @@ class CallSession {
             track_id: track.id,
             ready_state: track.readyState,
         });
+        this.playInitialGreeting("remote_track_attached");
 
         track.onended = () => {
             this.close("remote_track_ended").catch((error) => {
@@ -334,6 +339,65 @@ class CallSession {
             }
         );
         await this.playAudioUrl(ttsResult.audio_url, "gateway_tts");
+    }
+
+    async playInitialGreeting(reason = "playback_ready") {
+        if (
+            !this.initialGreeting ||
+            this.initialGreetingPlaybackStarted ||
+            this.initialGreetingPlayed ||
+            this.closedAt
+        ) {
+            return false;
+        }
+
+        if (!this.audioOutput || !this.pc) {
+            this.log("initial greeting deferred until playback is ready", {
+                reason,
+                has_audio_output: Boolean(this.audioOutput),
+                has_peer_connection: Boolean(this.pc),
+            });
+
+            return false;
+        }
+
+        this.initialGreetingPlaybackStarted = true;
+        this.initialGreetingPending = true;
+
+        try {
+            this.log("initial greeting TTS requested", {
+                reason,
+                text_length: this.initialGreeting.length,
+            });
+
+            const ttsResult = await ttsService.synthesize(
+                {
+                    text: this.initialGreeting,
+                    format: "mp3",
+                },
+                {
+                    baseUrl: this.baseUrl,
+                }
+            );
+
+            if (!ttsResult.audio_url) {
+                throw new Error("Initial greeting TTS did not return audio_url");
+            }
+
+            await this.playAudioUrl(ttsResult.audio_url, "initial_greeting");
+            this.initialGreetingPlayed = true;
+
+            return true;
+        } catch (error) {
+            this.log("initial greeting playback failed", {
+                reason,
+                error: error.message,
+            });
+
+            return false;
+        } finally {
+            this.initialGreetingPending = false;
+        }
     }
 
     async playAudioUrl(audioUrl, source) {
@@ -511,6 +575,12 @@ class CallSession {
             this.close(`peer_connection_${state}`).catch((error) => {
                 console.error("Error closing peer connection", error);
             });
+
+            return;
+        }
+
+        if (state === "connected") {
+            this.playInitialGreeting("peer_connection_connected");
         }
     }
 
@@ -526,6 +596,12 @@ class CallSession {
             this.close(`ice_${state}`).catch((error) => {
                 console.error("Error closing ICE connection", error);
             });
+
+            return;
+        }
+
+        if (["connected", "completed"].includes(state)) {
+            this.playInitialGreeting("ice_connected");
         }
     }
 
@@ -558,6 +634,9 @@ class CallSession {
                 ? new Date(this.lastPlaybackAt).toISOString()
                 : null,
             output_active: this.outputActive,
+            initial_greeting_configured: Boolean(this.initialGreeting),
+            initial_greeting_pending: this.initialGreetingPending,
+            initial_greeting_played: this.initialGreetingPlayed,
             input_muted_until: this.inputMutedUntil
                 ? new Date(this.inputMutedUntil).toISOString()
                 : null,
@@ -672,7 +751,7 @@ class CallSession {
     }
 
     shouldIgnoreInboundAudio() {
-        return this.outputActive || Date.now() < this.inputMutedUntil;
+        return this.initialGreetingPending || this.outputActive || Date.now() < this.inputMutedUntil;
     }
 
     logInputMuted() {
@@ -698,6 +777,14 @@ function resolveCallLanguage(payloadLanguage) {
     }
 
     return env.callAudioLanguage || payloadLanguage || "es";
+}
+
+function normalizeInitialGreeting(value) {
+    if (typeof value !== "string") {
+        return "";
+    }
+
+    return value.replace(/\s+/g, " ").trim();
 }
 
 function waitForIceGatheringComplete(pc, timeoutMs) {

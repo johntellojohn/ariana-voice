@@ -212,7 +212,8 @@ Body:
   "offer_sdp": "v=0...",
   "tenant": "sigcrm_intelho",
   "agent_id": 1,
-  "callback_url": "https://intelho.sigcrm.pro/api/voice-calls/events"
+  "callback_url": "https://intelho.sigcrm.pro/api/voice-calls/events",
+  "initial_greeting": "Hola, gracias por llamar. Soy el asistente virtual, en que puedo ayudarte?"
 }
 ```
 
@@ -234,11 +235,16 @@ Flujo interno:
 Meta offer_sdp -> Laravel -> Ariana Voice Gateway
 Gateway crea RTCPeerConnection y answer_sdp
 Laravel acepta la llamada en Meta con answer_sdp
+Si llega initial_greeting, Gateway genera TTS y lo reproduce una sola vez
 Gateway captura audio remoto, corta turnos por silencio/RMS y usa STT
 Gateway envia transcript a Laravel por callback_url
 Laravel responde con text o audio_url
 Gateway genera/reproduce TTS hacia la llamada WebRTC
 ```
+
+`initial_greeting` es opcional. Si viene vacio o no llega, el flujo conserva el
+comportamiento anterior. Si falla el TTS del saludo, la llamada continua y el
+gateway queda esperando audio del usuario.
 
 Callback de transcripcion hacia Laravel:
 

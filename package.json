@@ -9,6 +9,7 @@
     "check": "node scripts/check-js.js",
     "test:realtime-initial-greeting": "node scripts/test-realtime-initial-greeting.js",
     "test:realtime-interruptions": "node scripts/test-realtime-interruptions.js",
+    "test:realtime-tool-intents": "node scripts/test-realtime-tool-intents.js",
     "docker:up": "docker compose up -d --build",
     "docker:down": "docker compose down",
     "docker:logs": "docker compose logs -f api"

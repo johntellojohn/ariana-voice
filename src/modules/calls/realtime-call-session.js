@@ -229,7 +229,7 @@ class RealtimeCallSession {
             }),
             functionTool(
                 "search_knowledge",
-                "Busca fragmentos reales en la base de conocimiento vectorial del agente. Usala antes de responder preguntas sobre documentos, TXT cargados, miembros del equipo, politicas o informacion interna que no este en el turno actual.",
+                "Busca fragmentos reales en la base de conocimiento vectorial del agente. Usala para preguntas informativas sobre documentos, TXT cargados, miembros del equipo, roles, politicas o informacion interna, aunque mencione capacitaciones, soporte, horarios o agenda.",
                 {
                     type: "object",
                     properties: {
@@ -245,7 +245,7 @@ class RealtimeCallSession {
                 properties: {},
                 additionalProperties: false,
             }),
-            functionTool("check_availability", "Consulta disponibilidad real de agenda.", {
+            functionTool("check_availability", "Consulta disponibilidad real de agenda solo cuando el usuario quiera agendar, reagendar o ver horarios disponibles. No la uses para preguntas informativas sobre miembros del equipo, roles o areas de apoyo.", {
                 type: "object",
                 properties: {
                     fecha: { type: "string" },

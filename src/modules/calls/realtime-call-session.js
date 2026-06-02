@@ -237,15 +237,19 @@ class RealtimeCallSession {
                 properties: {},
                 additionalProperties: false,
             }),
-            functionTool("search_knowledge", "Busca en la base de conocimiento vectorial del agente.", {
-                type: "object",
-                properties: {
-                    query: { type: "string" },
-                    limit: { type: "integer" },
-                },
-                required: ["query"],
-                additionalProperties: false,
-            }),
+            functionTool(
+                "search_knowledge",
+                "Busca fragmentos reales en la base de conocimiento vectorial del agente. Usala antes de responder preguntas sobre documentos, TXT cargados, miembros del equipo, politicas o informacion interna que no este en el turno actual.",
+                {
+                    type: "object",
+                    properties: {
+                        query: { type: "string" },
+                        limit: { type: "integer" },
+                    },
+                    required: ["query"],
+                    additionalProperties: false,
+                }
+            ),
             functionTool("search_customer", "Consulta el cliente asociado a la llamada.", {
                 type: "object",
                 properties: {},
@@ -465,6 +469,9 @@ class RealtimeCallSession {
             message: result.message || (result.data && result.data.message) || null,
             options_count: Array.isArray(result.data && result.data.options)
                 ? result.data.options.length
+                : null,
+            matches_count: Array.isArray(result.data && result.data.matches)
+                ? result.data.matches.length
                 : null,
         });
 

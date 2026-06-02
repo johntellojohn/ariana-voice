@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 
 const CallSession = require("./call-session");
+const RealtimeCallSession = require("./realtime-call-session");
 
 const sessions = new Map();
 const sessionsByCallId = new Map();
@@ -39,7 +40,8 @@ async function createSession(payload, options = {}) {
     }
 
     const sessionId = crypto.randomUUID();
-    const session = new CallSession(payload, {
+    const SessionClass = selectSessionClass(payload);
+    const session = new SessionClass(payload, {
         sessionId,
         baseUrl: options.baseUrl,
         onClosed: removeSession,
@@ -92,10 +94,19 @@ function listSessions() {
     return Array.from(sessions.values()).map((session) => session.snapshot());
 }
 
+function selectSessionClass(payload) {
+    if (payload && (payload.mode === "realtime" || payload.realtime)) {
+        return RealtimeCallSession;
+    }
+
+    return CallSession;
+}
+
 module.exports = {
     createSession,
     getSession,
     getSessionByCallId,
     closeSession,
     listSessions,
+    _selectSessionClassForTest: selectSessionClass,
 };

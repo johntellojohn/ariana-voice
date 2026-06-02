@@ -72,6 +72,7 @@ const env = {
     callPostPlaybackMuteMs: toNumber(process.env.CALL_POST_PLAYBACK_MUTE_MS, 800),
     callLogSdp: toBoolean(process.env.CALL_LOG_SDP, true),
     callPlaybackWaitForIceMs: toNumber(process.env.CALL_PLAYBACK_WAIT_FOR_ICE_MS, 5000),
+    realtimeToolTimeoutMs: toNumber(process.env.REALTIME_TOOL_TIMEOUT_MS, 12000),
 
     logLevel: process.env.LOG_LEVEL || "info",
 };

@@ -292,6 +292,30 @@ class RealtimeCallSession {
                 },
                 additionalProperties: false,
             }),
+            functionTool("reschedule_appointment", "Reagenda una cita existente del cliente. Usala despues de consultar disponibilidad y solo si el cliente confirmo la nueva opcion.", {
+                type: "object",
+                properties: {
+                    appointment_id: { type: "integer" },
+                    fecha_hora: { type: "string" },
+                    opcion_id: { type: "string" },
+                    trabajador_id: { type: "integer" },
+                    trabajador_nombre: { type: "string" },
+                    caracteristica: { type: "string" },
+                    confirmado_por_cliente: { type: "boolean" },
+                },
+                required: ["fecha_hora", "confirmado_por_cliente"],
+                additionalProperties: false,
+            }),
+            functionTool("cancel_appointment", "Cancela una cita futura del cliente solo si el cliente confirmo explicitamente la cancelacion.", {
+                type: "object",
+                properties: {
+                    appointment_id: { type: "integer" },
+                    motivo: { type: "string" },
+                    confirmado_por_cliente: { type: "boolean" },
+                },
+                required: ["confirmado_por_cliente"],
+                additionalProperties: false,
+            }),
             functionTool("save_call_event", "Guarda transcript o evento relevante de la llamada.", {
                 type: "object",
                 properties: {

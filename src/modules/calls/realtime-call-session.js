@@ -292,6 +292,13 @@ class RealtimeCallSession {
                 },
                 additionalProperties: false,
             }),
+            functionTool("show_appointments", "Muestra los agendamientos existentes del cliente asociado a la llamada. Usala cuando pida ver, mostrar o consultar sus agendamientos.", {
+                type: "object",
+                properties: {
+                    solo_futuras: { type: "boolean" },
+                },
+                additionalProperties: false,
+            }),
             functionTool("reschedule_appointment", "Reagenda una cita existente del cliente. Usala despues de consultar disponibilidad y solo si el cliente confirmo la nueva opcion.", {
                 type: "object",
                 properties: {

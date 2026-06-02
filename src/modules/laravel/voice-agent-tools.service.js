@@ -8,6 +8,8 @@ const TOOL_ENDPOINTS = {
     check_availability: "check-availability",
     create_appointment: "create-appointment",
     list_appointments: "list-appointments",
+    show_appointments: "show-appointments",
+    mostrar_agendamientos: "mostrar-agendamientos",
     reschedule_appointment: "reschedule-appointment",
     cancel_appointment: "cancel-appointment",
     save_call_event: "save-call-event",

@@ -27,7 +27,8 @@
     "helmet": "^8.2.0",
     "morgan": "^1.10.1",
     "multer": "^2.1.1",
-    "openai": "^6.39.0"
+    "openai": "^6.39.0",
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"

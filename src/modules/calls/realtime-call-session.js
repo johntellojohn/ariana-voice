@@ -1,8 +1,7 @@
 const wrtc = require("@roamhq/wrtc");
-const { OpenAIRealtimeWebSocket } = require("openai/beta/realtime/websocket");
+const WebSocket = require("ws");
 
 const env = require("../../config/env");
-const { getOpenAIClient } = require("../openai/openai.client");
 const { callTool } = require("../laravel/voice-agent-tools.service");
 const { AudioOutput } = require("./audio-output");
 const { int16ArrayToBuffer } = require("./wav.util");
@@ -113,25 +112,67 @@ class RealtimeCallSession {
     }
 
     async connectRealtime() {
-        const client = getOpenAIClient();
-        this.realtimeSocket = await OpenAIRealtimeWebSocket.create(client, {
-            model: this.model(),
+        if (!env.openaiApiKey) {
+            const error = new Error("OPENAI_API_KEY is not configured");
+            error.status = 503;
+            throw error;
+        }
+
+        const url = new URL("wss://api.openai.com/v1/realtime");
+        url.searchParams.set("model", this.model());
+
+        this.realtimeSocket = new WebSocket(url, {
+            headers: {
+                Authorization: `Bearer ${env.openaiApiKey}`,
+            },
         });
 
-        this.realtimeSocket.on("event", (event) => this.handleRealtimeEvent(event));
+        this.realtimeSocket.on("message", (message) => {
+            let event = null;
+
+            try {
+                event = JSON.parse(message.toString());
+            } catch (error) {
+                this.log("could not parse realtime websocket event", {
+                    error: error.message,
+                });
+                return;
+            }
+
+            this.handleRealtimeEvent(event);
+        });
         this.realtimeSocket.on("error", (error) => {
             this.log("realtime websocket error", {
                 error: error.message,
-                event: error.event || null,
             });
         });
+        this.realtimeSocket.on("close", (code, reasonBuffer) => {
+            const reason = reasonBuffer ? reasonBuffer.toString() : "";
+            this.realtimeReady = false;
+            this.log("realtime websocket closed", {
+                code,
+                reason,
+            });
 
-        await waitForOpenSocket(this.realtimeSocket.socket, env.realtimeConnectTimeoutMs);
-        this.realtimeReady = true;
+            if (!this.closedAt && this.status !== "starting") {
+                this.close(`realtime_socket_closed_${code}`).catch((error) => {
+                    console.error("Error closing realtime socket session", error);
+                });
+            }
+        });
+
+        await waitForOpenSocket(this.realtimeSocket, env.realtimeConnectTimeoutMs);
+        const sessionUpdateAck = waitForRealtimeSessionUpdated(
+            this.realtimeSocket,
+            env.realtimeConnectTimeoutMs
+        );
+
         this.sendRealtimeEvent({
             type: "session.update",
             session: this.sessionConfig(),
         });
+        await sessionUpdateAck;
+        this.realtimeReady = true;
 
         if (this.initialGreeting) {
             this.sendRealtimeEvent({
@@ -488,12 +529,12 @@ class RealtimeCallSession {
     }
 
     sendRealtimeEvent(event) {
-        if (!this.realtimeSocket) {
+        if (!this.realtimeSocket || this.realtimeSocket.readyState !== WebSocket.OPEN) {
             return;
         }
 
         try {
-            this.realtimeSocket.send(event);
+            this.realtimeSocket.send(JSON.stringify(event));
         } catch (error) {
             this.log("could not send realtime event", {
                 type: event.type,
@@ -535,8 +576,8 @@ class RealtimeCallSession {
             this.audioOutput.stop();
         }
 
-        if (this.realtimeSocket) {
-            this.realtimeSocket.close({ reason });
+        if (this.realtimeSocket && this.realtimeSocket.readyState !== WebSocket.CLOSED) {
+            this.realtimeSocket.close(1000, reason);
         }
 
         if (this.pc) {
@@ -648,7 +689,7 @@ function functionTool(name, description, parameters) {
 }
 
 function waitForOpenSocket(socket, timeoutMs) {
-    if (socket.readyState === 1) {
+    if (socket.readyState === WebSocket.OPEN) {
         return Promise.resolve(true);
     }
 
@@ -660,8 +701,9 @@ function waitForOpenSocket(socket, timeoutMs) {
 
         function cleanup() {
             clearTimeout(timeout);
-            socket.removeEventListener("open", onOpen);
-            socket.removeEventListener("error", onError);
+            socket.off("open", onOpen);
+            socket.off("error", onError);
+            socket.off("close", onClose);
         }
 
         function onOpen() {
@@ -669,13 +711,80 @@ function waitForOpenSocket(socket, timeoutMs) {
             resolve(true);
         }
 
-        function onError(event) {
+        function onError(error) {
             cleanup();
-            reject(new Error(event.message || "OpenAI Realtime WebSocket error"));
+            reject(new Error(error.message || "OpenAI Realtime WebSocket error"));
         }
 
-        socket.addEventListener("open", onOpen);
-        socket.addEventListener("error", onError);
+        function onClose(code, reasonBuffer) {
+            cleanup();
+            const reason = reasonBuffer ? reasonBuffer.toString() : "";
+            reject(
+                new Error(
+                    `OpenAI Realtime WebSocket closed before opening (${code}${reason ? `: ${reason}` : ""})`
+                )
+            );
+        }
+
+        socket.once("open", onOpen);
+        socket.once("error", onError);
+        socket.once("close", onClose);
+    });
+}
+
+function waitForRealtimeSessionUpdated(socket, timeoutMs) {
+    return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            cleanup();
+            reject(new Error("Timed out waiting for OpenAI Realtime session.updated"));
+        }, timeoutMs);
+
+        function cleanup() {
+            clearTimeout(timeout);
+            socket.off("message", onMessage);
+            socket.off("error", onError);
+            socket.off("close", onClose);
+        }
+
+        function onMessage(message) {
+            let event = null;
+
+            try {
+                event = JSON.parse(message.toString());
+            } catch (error) {
+                return;
+            }
+
+            if (event.type === "session.updated") {
+                cleanup();
+                resolve(event);
+                return;
+            }
+
+            if (event.type === "error") {
+                cleanup();
+                reject(new Error(realtimeErrorMessage(event)));
+            }
+        }
+
+        function onError(error) {
+            cleanup();
+            reject(new Error(error.message || "OpenAI Realtime WebSocket error"));
+        }
+
+        function onClose(code, reasonBuffer) {
+            cleanup();
+            const reason = reasonBuffer ? reasonBuffer.toString() : "";
+            reject(
+                new Error(
+                    `OpenAI Realtime WebSocket closed before session.updated (${code}${reason ? `: ${reason}` : ""})`
+                )
+            );
+        }
+
+        socket.on("message", onMessage);
+        socket.once("error", onError);
+        socket.once("close", onClose);
     });
 }
 
@@ -736,6 +845,19 @@ function parseJsonObject(value) {
     }
 }
 
+function realtimeErrorMessage(event) {
+    const error = event && event.error ? event.error : {};
+    const pieces = [
+        error.message || "OpenAI Realtime error",
+        error.code ? `code=${error.code}` : null,
+        error.param ? `param=${error.param}` : null,
+        error.type ? `type=${error.type}` : null,
+        error.event_id ? `event_id=${error.event_id}` : null,
+    ].filter(Boolean);
+
+    return pieces.join(" ");
+}
+
 function numberOr(value, fallback) {
     const parsed = Number(value);
 
@@ -754,4 +876,5 @@ module.exports = RealtimeCallSession;
 module.exports._private = {
     resamplePcm16,
     parseJsonObject,
+    realtimeErrorMessage,
 };

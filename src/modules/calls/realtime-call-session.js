@@ -4,6 +4,7 @@ const WebSocket = require("ws");
 const env = require("../../config/env");
 const { callTool } = require("../laravel/voice-agent-tools.service");
 const { AudioOutput } = require("./audio-output");
+const { SpeechInterruptionGate } = require("./speech-interruption-gate");
 const { int16ArrayToBuffer } = require("./wav.util");
 
 const { RTCAudioSink, RTCAudioSource } = wrtc.nonstandard;
@@ -45,6 +46,14 @@ class RealtimeCallSession {
         this.lastSpeechAt = null;
         this.lastPlaybackAt = null;
         this.sequence = 0;
+        this.inputSpeechFrames = [];
+        this.lastInputLevel = 0;
+        this.interruptionGate = new SpeechInterruptionGate({
+            debounceMs: this.interruptionDebounceMs(),
+            onInterrupt: (reason) => this.handleInterruption(reason),
+            onIgnored: (reason) => this.log("realtime speech start ignored", { reason }),
+            shouldInterrupt: () => this.hasConfirmedInputSpeech(),
+        });
     }
 
     async start() {
@@ -340,12 +349,18 @@ class RealtimeCallSession {
 
         return {
             type: configured.type || "server_vad",
-            threshold: numberOr(configured.threshold, 0.5),
+            threshold: numberOr(configured.threshold, env.realtimeVadThreshold),
             prefix_padding_ms: numberOr(configured.prefix_padding_ms, 300),
             silence_duration_ms: numberOr(configured.silence_duration_ms, 500),
             create_response: configured.create_response !== false,
             interrupt_response: configured.interrupt_response !== false,
         };
+    }
+
+    interruptionDebounceMs() {
+        const configured = this.realtime.interruption_debounce_ms;
+
+        return Math.max(0, numberOr(configured, env.realtimeInterruptDebounceMs));
     }
 
     handleTrack(track) {
@@ -377,6 +392,8 @@ class RealtimeCallSession {
             return;
         }
 
+        this.trackInputSpeech(data);
+
         const pcm48 = int16ArrayToBuffer(data.samples);
         const pcm24 = resamplePcm16(pcm48, data.sampleRate || META_SAMPLE_RATE, REALTIME_SAMPLE_RATE);
 
@@ -389,6 +406,46 @@ class RealtimeCallSession {
             audio: pcm24.toString("base64"),
         });
         this.markActivity("remote_audio_streamed");
+    }
+
+    trackInputSpeech(data) {
+        const sampleRate = data.sampleRate || META_SAMPLE_RATE;
+        const channelCount = data.channelCount || 1;
+        const durationMs = (data.samples.length / channelCount / sampleRate) * 1000;
+        const level = calculateRms(data.samples);
+        const now = Date.now();
+        const windowMs = Math.max(1, env.realtimeInterruptWindowMs);
+
+        this.lastInputLevel = level;
+        this.inputSpeechFrames.push({
+            at: now,
+            durationMs,
+            hasSpeech: level >= env.realtimeInterruptRmsThreshold,
+        });
+
+        this.inputSpeechFrames = this.inputSpeechFrames.filter(
+            (frame) => frame.at >= now - windowMs
+        );
+    }
+
+    hasConfirmedInputSpeech() {
+        const now = Date.now();
+        const windowMs = Math.max(1, env.realtimeInterruptWindowMs);
+        const speechMs = this.inputSpeechFrames
+            .filter((frame) => frame.at >= now - windowMs && frame.hasSpeech)
+            .reduce((total, frame) => total + frame.durationMs, 0);
+        const confirmed = speechMs >= env.realtimeInterruptMinSpeechMs;
+
+        if (!confirmed) {
+            this.log("realtime interruption rejected by local audio check", {
+                speech_ms: Math.round(speechMs),
+                min_speech_ms: env.realtimeInterruptMinSpeechMs,
+                last_level: Number(this.lastInputLevel.toFixed(5)),
+                rms_threshold: env.realtimeInterruptRmsThreshold,
+            });
+        }
+
+        return confirmed;
     }
 
     handleRealtimeEvent(event) {
@@ -436,7 +493,10 @@ class RealtimeCallSession {
                 break;
             case "input_audio_buffer.speech_started":
                 this.lastSpeechAt = Date.now();
-                this.handleInterruption("user_speech_started");
+                this.interruptionGate.speechStarted("user_speech_started");
+                break;
+            case "input_audio_buffer.speech_stopped":
+                this.interruptionGate.speechStopped("speech_stopped_before_debounce");
                 break;
             case "error":
                 this.log("realtime event error", {
@@ -634,6 +694,7 @@ class RealtimeCallSession {
         this.closedAt = new Date();
         this.status = "closed";
         this.closeReason = reason;
+        this.interruptionGate.cancelPending();
 
         for (const sink of this.sinks) {
             sink.stop();
@@ -931,6 +992,21 @@ function numberOr(value, fallback) {
     const parsed = Number(value);
 
     return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function calculateRms(samples) {
+    if (!samples || !samples.length) {
+        return 0;
+    }
+
+    let sumSquares = 0;
+
+    for (let index = 0; index < samples.length; index += 1) {
+        const normalized = samples[index] / 32768;
+        sumSquares += normalized * normalized;
+    }
+
+    return Math.sqrt(sumSquares / samples.length);
 }
 
 function normalizeInitialGreeting(value) {

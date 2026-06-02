@@ -78,6 +78,23 @@ const env = {
     callPlaybackWaitForIceMs: toNumber(process.env.CALL_PLAYBACK_WAIT_FOR_ICE_MS, 5000),
     realtimeConnectTimeoutMs: toNumber(process.env.REALTIME_CONNECT_TIMEOUT_MS, 10000),
     realtimeToolTimeoutMs: toNumber(process.env.REALTIME_TOOL_TIMEOUT_MS, 12000),
+    realtimeVadThreshold: toNumber(process.env.OPENAI_REALTIME_VAD_THRESHOLD, 0.65),
+    realtimeInterruptDebounceMs: toNumber(
+        process.env.OPENAI_REALTIME_INTERRUPT_DEBOUNCE_MS,
+        300
+    ),
+    realtimeInterruptRmsThreshold: toNumber(
+        process.env.OPENAI_REALTIME_INTERRUPT_RMS_THRESHOLD,
+        0.02
+    ),
+    realtimeInterruptMinSpeechMs: toNumber(
+        process.env.OPENAI_REALTIME_INTERRUPT_MIN_SPEECH_MS,
+        250
+    ),
+    realtimeInterruptWindowMs: toNumber(
+        process.env.OPENAI_REALTIME_INTERRUPT_WINDOW_MS,
+        700
+    ),
 
     logLevel: process.env.LOG_LEVEL || "info",
 };

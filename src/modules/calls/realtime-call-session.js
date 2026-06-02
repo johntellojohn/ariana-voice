@@ -23,6 +23,9 @@ class RealtimeCallSession {
         this.agentId = payload.agent_id || null;
         this.toolsBaseUrl = payload.tools_base_url || null;
         this.initialGreeting = normalizeInitialGreeting(payload.initial_greeting);
+        this.initialGreetingPlaybackStarted = false;
+        this.initialGreetingPending = Boolean(this.initialGreeting);
+        this.initialGreetingPlayed = false;
         this.realtime = payload.realtime || {};
         this.createdAt = new Date();
         this.closedAt = null;
@@ -183,28 +186,6 @@ class RealtimeCallSession {
         await sessionUpdateAck;
         this.realtimeReady = true;
 
-        if (this.initialGreeting) {
-            this.sendRealtimeEvent({
-                type: "conversation.item.create",
-                item: {
-                    type: "message",
-                    role: "user",
-                    content: [
-                        {
-                            type: "input_text",
-                            text: "La llamada acaba de conectar. Saluda brevemente con el saludo configurado y pregunta como puedes ayudar.",
-                        },
-                    ],
-                },
-            });
-            this.sendRealtimeEvent({
-                type: "response.create",
-                response: {
-                    output_modalities: ["audio"],
-                    instructions: `Usa este saludo inicial si encaja de forma natural: ${this.initialGreeting}`,
-                },
-            });
-        }
     }
 
     sessionConfig() {
@@ -378,6 +359,12 @@ class RealtimeCallSession {
         this.log("realtime remote audio track attached", {
             track_id: track.id,
             ready_state: track.readyState,
+        });
+        this.playInitialGreeting("remote_track_attached").catch((error) => {
+            this.log("realtime initial greeting failed", {
+                reason: "remote_track_attached",
+                error: error.message,
+            });
         });
 
         track.onended = () => {
@@ -632,6 +619,56 @@ class RealtimeCallSession {
         });
     }
 
+    async playInitialGreeting(reason = "playback_ready") {
+        if (
+            !this.initialGreeting ||
+            this.initialGreetingPlaybackStarted ||
+            this.initialGreetingPlayed ||
+            this.closedAt
+        ) {
+            return false;
+        }
+
+        if (!this.realtimeReady || !this.audioOutput || !this.pc) {
+            this.log("realtime initial greeting deferred until playback is ready", {
+                reason,
+                realtime_ready: this.realtimeReady,
+                has_audio_output: Boolean(this.audioOutput),
+                has_peer_connection: Boolean(this.pc),
+            });
+
+            return false;
+        }
+
+        this.initialGreetingPlaybackStarted = true;
+        this.initialGreetingPending = true;
+
+        try {
+            await this.waitForPlaybackReady();
+
+            if (this.closedAt) {
+                return false;
+            }
+
+            this.log("realtime initial greeting requested", {
+                reason,
+                text_length: this.initialGreeting.length,
+            });
+            this.sendRealtimeEvent({
+                type: "response.create",
+                response: {
+                    output_modalities: ["audio"],
+                    instructions: `Di exactamente este saludo inicial, sin agregar frases, preguntas ni informacion adicional: "${this.initialGreeting}"`,
+                },
+            });
+            this.initialGreetingPlayed = true;
+
+            return true;
+        } finally {
+            this.initialGreetingPending = false;
+        }
+    }
+
     async saveTranscript(role, text, event) {
         text = String(text || "").trim();
 
@@ -686,6 +723,65 @@ class RealtimeCallSession {
             });
     }
 
+    waitForPlaybackReady() {
+        if (this.isIceReady()) {
+            return Promise.resolve(true);
+        }
+
+        this.log("realtime waiting for ICE before playback", {
+            connection_state: this.pc ? this.pc.connectionState : null,
+            ice_connection_state: this.pc ? this.pc.iceConnectionState : null,
+            timeout_ms: env.callPlaybackWaitForIceMs,
+        });
+
+        return new Promise((resolve) => {
+            const timeout = setTimeout(() => {
+                cleanup();
+                this.log("realtime playback continuing without connected ICE", {
+                    connection_state: this.pc ? this.pc.connectionState : null,
+                    ice_connection_state: this.pc ? this.pc.iceConnectionState : null,
+                });
+                resolve(false);
+            }, env.callPlaybackWaitForIceMs);
+
+            const cleanup = () => {
+                clearTimeout(timeout);
+
+                if (this.pc && this.pc.removeEventListener) {
+                    this.pc.removeEventListener("connectionstatechange", onStateChange);
+                    this.pc.removeEventListener("iceconnectionstatechange", onStateChange);
+                }
+            };
+
+            const onStateChange = () => {
+                if (this.isIceReady()) {
+                    cleanup();
+                    this.log("realtime ICE ready for playback", {
+                        connection_state: this.pc ? this.pc.connectionState : null,
+                        ice_connection_state: this.pc ? this.pc.iceConnectionState : null,
+                    });
+                    resolve(true);
+                }
+            };
+
+            if (this.pc && this.pc.addEventListener) {
+                this.pc.addEventListener("connectionstatechange", onStateChange);
+                this.pc.addEventListener("iceconnectionstatechange", onStateChange);
+            }
+        });
+    }
+
+    isIceReady() {
+        if (!this.pc) {
+            return false;
+        }
+
+        return (
+            this.pc.connectionState === "connected" ||
+            ["connected", "completed"].includes(this.pc.iceConnectionState)
+        );
+    }
+
     async close(reason = "closed") {
         if (this.closedAt) {
             return;
@@ -736,6 +832,16 @@ class RealtimeCallSession {
             this.close(`peer_connection_${state}`).catch((error) => {
                 console.error("Error closing realtime peer connection", error);
             });
+            return;
+        }
+
+        if (state === "connected") {
+            this.playInitialGreeting("peer_connection_connected").catch((error) => {
+                this.log("realtime initial greeting failed", {
+                    reason: "peer_connection_connected",
+                    error: error.message,
+                });
+            });
         }
     }
 
@@ -750,6 +856,16 @@ class RealtimeCallSession {
         if (["failed", "disconnected", "closed"].includes(state)) {
             this.close(`ice_${state}`).catch((error) => {
                 console.error("Error closing realtime ICE connection", error);
+            });
+            return;
+        }
+
+        if (["connected", "completed"].includes(state)) {
+            this.playInitialGreeting("ice_connected").catch((error) => {
+                this.log("realtime initial greeting failed", {
+                    reason: "ice_connected",
+                    error: error.message,
+                });
             });
         }
     }
@@ -774,6 +890,9 @@ class RealtimeCallSession {
             last_playback_at: this.lastPlaybackAt
                 ? new Date(this.lastPlaybackAt).toISOString()
                 : null,
+            initial_greeting_configured: Boolean(this.initialGreeting),
+            initial_greeting_pending: this.initialGreetingPending,
+            initial_greeting_played: this.initialGreetingPlayed,
             created_at: this.createdAt.toISOString(),
             closed_at: this.closedAt ? this.closedAt.toISOString() : null,
             tools_base_url: this.toolsBaseUrl,

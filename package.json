@@ -7,6 +7,7 @@
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
     "check": "node scripts/check-js.js",
+    "test:realtime-initial-greeting": "node scripts/test-realtime-initial-greeting.js",
     "test:realtime-interruptions": "node scripts/test-realtime-interruptions.js",
     "docker:up": "docker compose up -d --build",
     "docker:down": "docker compose down",

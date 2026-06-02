@@ -46,18 +46,25 @@ class AudioOutput {
             this.timer = null;
         }
 
-        this.buffer = Buffer.alloc(0);
+        this.clear("stopped");
         this.log("silence pump stopped", {
             silence_frames_sent: this.silenceFramesSent,
             audio_frames_sent: this.audioFramesSent,
             pending_jobs: this.playbackJobs.length,
         });
+    }
 
+    clear(reason = "cleared") {
+        const pendingJobs = this.playbackJobs.length;
+        const pendingBytes = this.buffer.length;
+
+        this.buffer = Buffer.alloc(0);
         while (this.playbackJobs.length) {
             const job = this.playbackJobs.shift();
             job.resolve({
                 id: job.id,
                 stopped: true,
+                reason,
                 framesSent: job.framesSent,
                 framesQueued: job.framesQueued,
                 pcmBytes: job.pcmBytes,
@@ -65,6 +72,12 @@ class AudioOutput {
                 metadata: job.metadata,
             });
         }
+
+        this.log("audio output cleared", {
+            reason,
+            pending_jobs: pendingJobs,
+            pending_bytes: pendingBytes,
+        });
     }
 
     enqueuePcm(pcmBuffer, metadata = {}) {

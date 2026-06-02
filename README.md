@@ -235,11 +235,11 @@ Flujo interno:
 Meta offer_sdp -> Laravel -> Ariana Voice Gateway
 Gateway crea RTCPeerConnection y answer_sdp
 Laravel acepta la llamada en Meta con answer_sdp
-Si llega initial_greeting, Gateway genera TTS y lo reproduce una sola vez
-Gateway captura audio remoto, corta turnos por silencio/RMS y usa STT
-Gateway envia transcript a Laravel por callback_url
-Laravel responde con text o audio_url
-Gateway genera/reproduce TTS hacia la llamada WebRTC
+Si Laravel envia mode=realtime, Gateway conecta OpenAI Realtime
+Gateway envia audio vivo del usuario a Realtime y reproduce audio PCM del modelo
+Cuando el modelo necesita datos, Gateway ejecuta tools HTTP contra Laravel
+Si Realtime falla antes del answer_sdp, Gateway intenta fallback V1 legacy
+En fallback V1, Gateway captura audio remoto, corta turnos por silencio/RMS y usa STT/TTS
 ```
 
 `initial_greeting` es opcional. Si viene vacio o no llega, el flujo conserva el
@@ -306,6 +306,11 @@ CALL_SILENCE_LOG_EVERY_FRAMES=6000
 CALL_IDLE_TIMEOUT_MS=60000
 CALL_MAX_DURATION_MS=1800000
 CALL_POST_PLAYBACK_MUTE_MS=800
+OPENAI_REALTIME_MODEL=gpt-realtime
+OPENAI_REALTIME_VOICE=marin
+OPENAI_REALTIME_TRANSCRIPTION_MODEL=gpt-4o-mini-transcribe
+REALTIME_CONNECT_TIMEOUT_MS=10000
+REALTIME_TOOL_TIMEOUT_MS=12000
 ```
 
 Importante para produccion: WebRTC usa ICE/UDP para media, no solo el puerto

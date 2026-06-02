@@ -40,13 +40,43 @@ async function createSession(payload, options = {}) {
     }
 
     const sessionId = crypto.randomUUID();
-    const SessionClass = selectSessionClass(payload);
+    let SessionClass = selectSessionClass(payload);
     const session = new SessionClass(payload, {
         sessionId,
         baseUrl: options.baseUrl,
         onClosed: removeSession,
     });
-    const answerSdp = await session.start();
+    let answerSdp;
+
+    try {
+        answerSdp = await session.start();
+    } catch (error) {
+        if (SessionClass !== RealtimeCallSession) {
+            throw error;
+        }
+
+        console.warn(
+            `[call:${sessionId} call_id:${payload.call_id}] realtime session failed before answer_sdp, falling back to legacy V1`,
+            JSON.stringify({ error: error.message })
+        );
+
+        await session.close("realtime_start_failed").catch(() => {});
+        SessionClass = CallSession;
+        const fallbackSession = new SessionClass(payload, {
+            sessionId,
+            baseUrl: options.baseUrl,
+            onClosed: removeSession,
+        });
+        answerSdp = await fallbackSession.start();
+        sessions.set(sessionId, fallbackSession);
+        sessionsByCallId.set(payload.call_id, sessionId);
+
+        return {
+            session: fallbackSession,
+            answerSdp,
+            fallback: "legacy_v1",
+        };
+    }
 
     sessions.set(sessionId, session);
     sessionsByCallId.set(payload.call_id, sessionId);

@@ -39,6 +39,10 @@ const env = {
     openaiSttModel: process.env.OPENAI_STT_MODEL || "gpt-4o-mini-transcribe",
     openaiTtsModel: process.env.OPENAI_TTS_MODEL || "gpt-4o-mini-tts",
     openaiTtsVoice: process.env.OPENAI_TTS_VOICE || "marin",
+    openaiRealtimeModel: process.env.OPENAI_REALTIME_MODEL || "gpt-realtime",
+    openaiRealtimeVoice: process.env.OPENAI_REALTIME_VOICE || "marin",
+    realtimeTranscriptionModel:
+        process.env.OPENAI_REALTIME_TRANSCRIPTION_MODEL || "gpt-4o-mini-transcribe",
     normalizeMp3WithFfmpeg: toBoolean(process.env.NORMALIZE_MP3_WITH_FFMPEG, true),
 
     voiceApiToken: process.env.VOICE_API_TOKEN || "",
@@ -72,6 +76,7 @@ const env = {
     callPostPlaybackMuteMs: toNumber(process.env.CALL_POST_PLAYBACK_MUTE_MS, 800),
     callLogSdp: toBoolean(process.env.CALL_LOG_SDP, true),
     callPlaybackWaitForIceMs: toNumber(process.env.CALL_PLAYBACK_WAIT_FOR_ICE_MS, 5000),
+    realtimeConnectTimeoutMs: toNumber(process.env.REALTIME_CONNECT_TIMEOUT_MS, 10000),
     realtimeToolTimeoutMs: toNumber(process.env.REALTIME_TOOL_TIMEOUT_MS, 12000),
 
     logLevel: process.env.LOG_LEVEL || "info",

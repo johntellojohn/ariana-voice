@@ -1,3 +1,16 @@
+const wrtc = require("@roamhq/wrtc");
+const { OpenAIRealtimeWebSocket } = require("openai/beta/realtime/websocket");
+
+const env = require("../../config/env");
+const { getOpenAIClient } = require("../openai/openai.client");
+const { callTool } = require("../laravel/voice-agent-tools.service");
+const { AudioOutput } = require("./audio-output");
+const { int16ArrayToBuffer } = require("./wav.util");
+
+const { RTCAudioSink, RTCAudioSource } = wrtc.nonstandard;
+const REALTIME_SAMPLE_RATE = 24000;
+const META_SAMPLE_RATE = 48000;
+
 class RealtimeCallSession {
     constructor(payload, options = {}) {
         this.sessionId = options.sessionId;
@@ -9,16 +22,498 @@ class RealtimeCallSession {
         this.tenant = payload.tenant || null;
         this.agentId = payload.agent_id || null;
         this.toolsBaseUrl = payload.tools_base_url || null;
+        this.initialGreeting = normalizeInitialGreeting(payload.initial_greeting);
         this.realtime = payload.realtime || {};
         this.createdAt = new Date();
         this.closedAt = null;
         this.status = "created";
+        this.pc = null;
+        this.audioSource = null;
+        this.audioOutput = null;
+        this.outboundTrack = null;
+        this.sinks = [];
+        this.remoteTracks = [];
+        this.realtimeSocket = null;
+        this.realtimeReady = false;
+        this.audioInputReady = false;
+        this.outputActive = false;
+        this.currentResponseId = null;
+        this.currentAssistantItemId = null;
+        this.responseGeneration = 0;
+        this.toolGeneration = 0;
+        this.lastActivityAt = Date.now();
+        this.lastActivityType = "created";
+        this.lastSpeechAt = null;
+        this.lastPlaybackAt = null;
+        this.sequence = 0;
     }
 
     async start() {
-        const error = new Error("Realtime call session bridge is not implemented yet");
-        error.status = 501;
-        throw error;
+        this.status = "starting";
+        this.pc = new wrtc.RTCPeerConnection({
+            iceServers: env.webrtcIceServers,
+        });
+
+        this.pc.ontrack = (event) => this.handleTrack(event.track);
+        this.pc.onconnectionstatechange = () => this.handleConnectionState();
+        this.pc.oniceconnectionstatechange = () => this.handleIceConnectionState();
+
+        await this.pc.setRemoteDescription(
+            new wrtc.RTCSessionDescription({
+                type: "offer",
+                sdp: this.offerSdp,
+            })
+        );
+
+        await this.setupOutboundAudio();
+        await this.connectRealtime();
+
+        const answer = await this.pc.createAnswer();
+        await this.pc.setLocalDescription(answer);
+        await waitForIceGatheringComplete(this.pc, env.webrtcIceGatherTimeoutMs);
+
+        this.status = "answer_ready";
+        this.log("realtime answer_sdp ready", {
+            answer_sdp_bytes: this.pc.localDescription.sdp.length,
+            model: this.model(),
+            voice: this.voice(),
+        });
+
+        return this.pc.localDescription.sdp;
+    }
+
+    async setupOutboundAudio() {
+        this.audioSource = new RTCAudioSource();
+        this.audioOutput = new AudioOutput(this.audioSource, {
+            sampleRate: META_SAMPLE_RATE,
+            frameMs: env.callSilenceFrameMs,
+            silenceLogEveryFrames: env.callSilenceLogEveryFrames,
+            logger: (message, data) => this.log(message, data),
+        });
+
+        const outboundTrack = this.audioSource.createTrack();
+        this.outboundTrack = outboundTrack;
+        const audioTransceiver = this.findAudioTransceiver();
+
+        if (audioTransceiver && audioTransceiver.sender) {
+            await audioTransceiver.sender.replaceTrack(outboundTrack);
+
+            try {
+                audioTransceiver.direction = "sendrecv";
+            } catch (error) {
+                this.log("could not force realtime audio transceiver direction", {
+                    error: error.message,
+                });
+            }
+        } else {
+            this.pc.addTrack(outboundTrack);
+        }
+
+        this.audioOutput.start();
+    }
+
+    async connectRealtime() {
+        const client = getOpenAIClient();
+        this.realtimeSocket = await OpenAIRealtimeWebSocket.create(client, {
+            model: this.model(),
+        });
+
+        this.realtimeSocket.on("event", (event) => this.handleRealtimeEvent(event));
+        this.realtimeSocket.on("error", (error) => {
+            this.log("realtime websocket error", {
+                error: error.message,
+                event: error.event || null,
+            });
+        });
+
+        await waitForOpenSocket(this.realtimeSocket.socket, env.realtimeConnectTimeoutMs);
+        this.realtimeReady = true;
+        this.sendRealtimeEvent({
+            type: "session.update",
+            session: this.sessionConfig(),
+        });
+
+        if (this.initialGreeting) {
+            this.sendRealtimeEvent({
+                type: "conversation.item.create",
+                item: {
+                    type: "message",
+                    role: "user",
+                    content: [
+                        {
+                            type: "input_text",
+                            text: "La llamada acaba de conectar. Saluda brevemente con el saludo configurado y pregunta como puedes ayudar.",
+                        },
+                    ],
+                },
+            });
+            this.sendRealtimeEvent({
+                type: "response.create",
+                response: {
+                    output_modalities: ["audio"],
+                    instructions: `Usa este saludo inicial si encaja de forma natural: ${this.initialGreeting}`,
+                },
+            });
+        }
+    }
+
+    sessionConfig() {
+        return {
+            type: "realtime",
+            model: this.model(),
+            instructions: this.instructions(),
+            output_modalities: ["audio"],
+            audio: {
+                input: {
+                    format: {
+                        type: "audio/pcm",
+                        rate: REALTIME_SAMPLE_RATE,
+                    },
+                    transcription: {
+                        model: env.realtimeTranscriptionModel,
+                        language: this.language(),
+                    },
+                    turn_detection: this.turnDetection(),
+                },
+                output: {
+                    format: {
+                        type: "audio/pcm",
+                        rate: REALTIME_SAMPLE_RATE,
+                    },
+                    voice: this.voice(),
+                },
+            },
+            tools: this.tools(),
+            tool_choice: "auto",
+            parallel_tool_calls: false,
+        };
+    }
+
+    tools() {
+        return [
+            functionTool("get_agent_context", "Obtiene contexto vigente de agente, llamada y configuracion.", {
+                type: "object",
+                properties: {},
+                additionalProperties: false,
+            }),
+            functionTool("search_knowledge", "Busca en la base de conocimiento vectorial del agente.", {
+                type: "object",
+                properties: {
+                    query: { type: "string" },
+                    limit: { type: "integer" },
+                },
+                required: ["query"],
+                additionalProperties: false,
+            }),
+            functionTool("search_customer", "Consulta el cliente asociado a la llamada.", {
+                type: "object",
+                properties: {},
+                additionalProperties: false,
+            }),
+            functionTool("check_availability", "Consulta disponibilidad real de agenda.", {
+                type: "object",
+                properties: {
+                    fecha: { type: "string" },
+                    dia_semana: { type: "string" },
+                    hora: { type: "string" },
+                    cantidad_dias: { type: "integer" },
+                    trabajador_id: { type: "integer" },
+                    trabajador_nombre: { type: "string" },
+                    caracteristica: { type: "string" },
+                    duracion_minutos: { type: "integer" },
+                    momento: { type: "string" },
+                },
+                additionalProperties: false,
+            }),
+            functionTool("create_appointment", "Crea una cita solo si el cliente confirmo explicitamente.", {
+                type: "object",
+                properties: {
+                    fecha_hora: { type: "string" },
+                    opcion_id: { type: "string" },
+                    trabajador_id: { type: "integer" },
+                    trabajador_nombre: { type: "string" },
+                    caracteristica: { type: "string" },
+                    duracion_minutos: { type: "integer" },
+                    descripcion: { type: "string" },
+                    confirmado_por_cliente: { type: "boolean" },
+                },
+                required: ["fecha_hora", "confirmado_por_cliente"],
+                additionalProperties: false,
+            }),
+            functionTool("save_call_event", "Guarda transcript o evento relevante de la llamada.", {
+                type: "object",
+                properties: {
+                    role: { type: "string" },
+                    text: { type: "string" },
+                    event: { type: "string" },
+                },
+                additionalProperties: false,
+            }),
+        ];
+    }
+
+    turnDetection() {
+        const configured = this.realtime.turn_detection || {};
+
+        return {
+            type: configured.type || "server_vad",
+            threshold: numberOr(configured.threshold, 0.5),
+            prefix_padding_ms: numberOr(configured.prefix_padding_ms, 300),
+            silence_duration_ms: numberOr(configured.silence_duration_ms, 500),
+            create_response: configured.create_response !== false,
+            interrupt_response: configured.interrupt_response !== false,
+        };
+    }
+
+    handleTrack(track) {
+        this.remoteTracks.push(track);
+
+        if (track.kind !== "audio") {
+            return;
+        }
+
+        const sink = new RTCAudioSink(track);
+        sink.ondata = (data) => this.handleAudioData(data);
+        this.sinks.push(sink);
+        this.status = "connected";
+        this.markActivity("remote_track_attached");
+        this.log("realtime remote audio track attached", {
+            track_id: track.id,
+            ready_state: track.readyState,
+        });
+
+        track.onended = () => {
+            this.close("remote_track_ended").catch((error) => {
+                console.error("Error closing ended realtime call session", error);
+            });
+        };
+    }
+
+    handleAudioData(data) {
+        if (this.closedAt || !this.realtimeReady) {
+            return;
+        }
+
+        const pcm48 = int16ArrayToBuffer(data.samples);
+        const pcm24 = resamplePcm16(pcm48, data.sampleRate || META_SAMPLE_RATE, REALTIME_SAMPLE_RATE);
+
+        if (!pcm24.length) {
+            return;
+        }
+
+        this.sendRealtimeEvent({
+            type: "input_audio_buffer.append",
+            audio: pcm24.toString("base64"),
+        });
+        this.markActivity("remote_audio_streamed");
+    }
+
+    handleRealtimeEvent(event) {
+        if (!event || this.closedAt) {
+            return;
+        }
+
+        switch (event.type) {
+            case "session.updated":
+                this.audioInputReady = true;
+                this.log("realtime session updated", {
+                    model: this.model(),
+                    voice: this.voice(),
+                });
+                break;
+            case "response.created":
+                this.currentResponseId = event.response && event.response.id;
+                this.responseGeneration += 1;
+                this.outputActive = true;
+                break;
+            case "response.output_audio.delta":
+                this.playRealtimeAudio(event);
+                break;
+            case "response.output_audio.done":
+            case "response.done":
+                this.outputActive = false;
+                this.lastPlaybackAt = Date.now();
+                this.markActivity("realtime_response_done");
+                break;
+            case "response.function_call_arguments.done":
+                this.handleFunctionCall(event).catch((error) => {
+                    this.log("realtime tool handling failed", {
+                        call_id: event.call_id,
+                        name: event.name,
+                        error: error.message,
+                    });
+                });
+                break;
+            case "conversation.item.input_audio_transcription.completed":
+                this.saveTranscript("user", event.transcript, event).catch(() => {});
+                break;
+            case "response.audio_transcript.done":
+            case "response.output_audio_transcript.done":
+                this.saveTranscript("assistant", event.transcript, event).catch(() => {});
+                break;
+            case "input_audio_buffer.speech_started":
+                this.lastSpeechAt = Date.now();
+                this.handleInterruption("user_speech_started");
+                break;
+            case "error":
+                this.log("realtime event error", {
+                    error: event.error || event,
+                });
+                break;
+            default:
+                break;
+        }
+    }
+
+    playRealtimeAudio(event) {
+        const delta = event.delta || "";
+
+        if (!delta || !this.audioOutput) {
+            return;
+        }
+
+        this.currentAssistantItemId = event.item_id || this.currentAssistantItemId;
+        const pcm24 = Buffer.from(delta, "base64");
+        const pcm48 = resamplePcm16(pcm24, REALTIME_SAMPLE_RATE, META_SAMPLE_RATE);
+
+        this.audioOutput.enqueuePcm(pcm48, {
+            source: "openai_realtime",
+            response_id: event.response_id,
+            item_id: event.item_id,
+        }).catch((error) => {
+            this.log("realtime audio playback failed", {
+                error: error.message,
+            });
+        });
+        this.markActivity("realtime_audio_received");
+    }
+
+    async handleFunctionCall(event) {
+        const generation = this.toolGeneration;
+        const args = parseJsonObject(event.arguments);
+        const result = await callTool(
+            event.name,
+            {
+                tools_base_url: this.toolsBaseUrl,
+                call_id: this.callId,
+                session_id: this.sessionId,
+                tenant: this.tenant,
+                agent_id: this.agentId,
+                tool_call_id: event.call_id,
+            },
+            args
+        ).catch((error) => ({
+            ok: false,
+            message: error.message,
+            status: error.response && error.response.status,
+            data: error.response && error.response.data,
+        }));
+
+        if (generation !== this.toolGeneration || this.closedAt) {
+            this.log("realtime tool result ignored after interruption", {
+                name: event.name,
+                call_id: event.call_id,
+            });
+            return;
+        }
+
+        this.sendRealtimeEvent({
+            type: "conversation.item.create",
+            item: {
+                type: "function_call_output",
+                call_id: event.call_id,
+                output: JSON.stringify(result),
+            },
+        });
+        this.sendRealtimeEvent({
+            type: "response.create",
+            response: {
+                output_modalities: ["audio"],
+            },
+        });
+    }
+
+    handleInterruption(reason = "interrupted") {
+        this.toolGeneration += 1;
+        this.outputActive = false;
+
+        if (this.audioOutput) {
+            this.audioOutput.clear(reason);
+        }
+
+        this.sendRealtimeEvent({
+            type: "response.cancel",
+        });
+
+        if (this.currentAssistantItemId) {
+            this.sendRealtimeEvent({
+                type: "conversation.item.truncate",
+                item_id: this.currentAssistantItemId,
+                content_index: 0,
+                audio_end_ms: 0,
+            });
+        }
+
+        this.markActivity("interruption");
+        this.log("realtime response interrupted", {
+            reason,
+            response_id: this.currentResponseId,
+            assistant_item_id: this.currentAssistantItemId,
+        });
+    }
+
+    async saveTranscript(role, text, event) {
+        text = String(text || "").trim();
+
+        if (!text || !this.toolsBaseUrl) {
+            return;
+        }
+
+        await callTool(
+            "save_call_event",
+            {
+                tools_base_url: this.toolsBaseUrl,
+                call_id: this.callId,
+                session_id: this.sessionId,
+                tenant: this.tenant,
+                agent_id: this.agentId,
+                tool_call_id: event.event_id,
+            },
+            {
+                role,
+                text,
+                event: event.type,
+            }
+        );
+    }
+
+    sendRealtimeEvent(event) {
+        if (!this.realtimeSocket) {
+            return;
+        }
+
+        try {
+            this.realtimeSocket.send(event);
+        } catch (error) {
+            this.log("could not send realtime event", {
+                type: event.type,
+                error: error.message,
+            });
+        }
+    }
+
+    findAudioTransceiver() {
+        return this.pc
+            .getTransceivers()
+            .find((transceiver) => {
+                const receiverTrack = transceiver.receiver && transceiver.receiver.track;
+                const senderTrack = transceiver.sender && transceiver.sender.track;
+
+                return (
+                    (receiverTrack && receiverTrack.kind === "audio") ||
+                    (senderTrack && senderTrack.kind === "audio")
+                );
+            });
     }
 
     async close(reason = "closed") {
@@ -30,8 +525,61 @@ class RealtimeCallSession {
         this.status = "closed";
         this.closeReason = reason;
 
+        for (const sink of this.sinks) {
+            sink.stop();
+        }
+
+        this.sinks = [];
+
+        if (this.audioOutput) {
+            this.audioOutput.stop();
+        }
+
+        if (this.realtimeSocket) {
+            this.realtimeSocket.close({ reason });
+        }
+
+        if (this.pc) {
+            this.pc.close();
+        }
+
+        await this.saveTranscript("system", `call closed: ${reason}`, {
+            event_id: `closed-${this.sessionId}`,
+            type: "call.closed",
+        }).catch(() => {});
+
         if (this.onClosed) {
             this.onClosed(this);
+        }
+    }
+
+    handleConnectionState() {
+        const state = this.pc.connectionState;
+
+        this.log("realtime peer connection state changed", {
+            connection_state: state,
+            ice_connection_state: this.pc.iceConnectionState,
+        });
+
+        if (["failed", "disconnected", "closed"].includes(state)) {
+            this.close(`peer_connection_${state}`).catch((error) => {
+                console.error("Error closing realtime peer connection", error);
+            });
+        }
+    }
+
+    handleIceConnectionState() {
+        const state = this.pc.iceConnectionState;
+
+        this.log("realtime ice connection state changed", {
+            connection_state: this.pc.connectionState,
+            ice_connection_state: state,
+        });
+
+        if (["failed", "disconnected", "closed"].includes(state)) {
+            this.close(`ice_${state}`).catch((error) => {
+                console.error("Error closing realtime ICE connection", error);
+            });
         }
     }
 
@@ -44,10 +592,166 @@ class RealtimeCallSession {
             agent_id: this.agentId,
             status: this.status,
             realtime: true,
+            realtime_ready: this.realtimeReady,
+            output_active: this.outputActive,
+            sequence: this.sequence,
+            last_activity_at: new Date(this.lastActivityAt).toISOString(),
+            last_activity_type: this.lastActivityType,
+            last_speech_at: this.lastSpeechAt
+                ? new Date(this.lastSpeechAt).toISOString()
+                : null,
+            last_playback_at: this.lastPlaybackAt
+                ? new Date(this.lastPlaybackAt).toISOString()
+                : null,
             created_at: this.createdAt.toISOString(),
             closed_at: this.closedAt ? this.closedAt.toISOString() : null,
+            tools_base_url: this.toolsBaseUrl,
         };
+    }
+
+    model() {
+        return this.realtime.model || env.openaiRealtimeModel;
+    }
+
+    voice() {
+        return this.realtime.voice || env.openaiRealtimeVoice;
+    }
+
+    language() {
+        return this.realtime.language || env.callAudioLanguage || "es";
+    }
+
+    instructions() {
+        return this.realtime.instructions || "Eres un agente de voz de EVA. Responde en espanol con frases breves y naturales.";
+    }
+
+    markActivity(type) {
+        this.lastActivityAt = Date.now();
+        this.lastActivityType = type;
+    }
+
+    log(message, data = {}) {
+        console.log(
+            `[realtime-call:${this.sessionId || "pending"} call_id:${this.callId || "unknown"}] ${message}`,
+            JSON.stringify(data)
+        );
     }
 }
 
+function functionTool(name, description, parameters) {
+    return {
+        type: "function",
+        name,
+        description,
+        parameters,
+    };
+}
+
+function waitForOpenSocket(socket, timeoutMs) {
+    if (socket.readyState === 1) {
+        return Promise.resolve(true);
+    }
+
+    return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            cleanup();
+            reject(new Error("Timed out waiting for OpenAI Realtime WebSocket"));
+        }, timeoutMs);
+
+        function cleanup() {
+            clearTimeout(timeout);
+            socket.removeEventListener("open", onOpen);
+            socket.removeEventListener("error", onError);
+        }
+
+        function onOpen() {
+            cleanup();
+            resolve(true);
+        }
+
+        function onError(event) {
+            cleanup();
+            reject(new Error(event.message || "OpenAI Realtime WebSocket error"));
+        }
+
+        socket.addEventListener("open", onOpen);
+        socket.addEventListener("error", onError);
+    });
+}
+
+function waitForIceGatheringComplete(pc, timeoutMs) {
+    if (pc.iceGatheringState === "complete") {
+        return Promise.resolve();
+    }
+
+    return new Promise((resolve) => {
+        const timeout = setTimeout(done, timeoutMs);
+
+        function done() {
+            clearTimeout(timeout);
+            pc.removeEventListener("icegatheringstatechange", onStateChange);
+            resolve();
+        }
+
+        function onStateChange() {
+            if (pc.iceGatheringState === "complete") {
+                done();
+            }
+        }
+
+        pc.addEventListener("icegatheringstatechange", onStateChange);
+    });
+}
+
+function resamplePcm16(buffer, fromRate, toRate) {
+    if (!buffer || !buffer.length || fromRate === toRate) {
+        return buffer || Buffer.alloc(0);
+    }
+
+    const inputSamples = Math.floor(buffer.length / 2);
+    const outputSamples = Math.max(1, Math.round((inputSamples * toRate) / fromRate));
+    const output = Buffer.alloc(outputSamples * 2);
+
+    for (let index = 0; index < outputSamples; index += 1) {
+        const sourceIndex = Math.min(
+            inputSamples - 1,
+            Math.floor((index * fromRate) / toRate)
+        );
+        output.writeInt16LE(buffer.readInt16LE(sourceIndex * 2), index * 2);
+    }
+
+    return output;
+}
+
+function parseJsonObject(value) {
+    if (value && typeof value === "object") {
+        return value;
+    }
+
+    try {
+        const parsed = JSON.parse(String(value || "{}"));
+        return parsed && typeof parsed === "object" ? parsed : {};
+    } catch (error) {
+        return {};
+    }
+}
+
+function numberOr(value, fallback) {
+    const parsed = Number(value);
+
+    return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function normalizeInitialGreeting(value) {
+    if (typeof value !== "string") {
+        return "";
+    }
+
+    return value.replace(/\s+/g, " ").trim();
+}
+
 module.exports = RealtimeCallSession;
+module.exports._private = {
+    resamplePcm16,
+    parseJsonObject,
+};

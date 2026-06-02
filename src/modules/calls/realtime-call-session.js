@@ -432,6 +432,13 @@ class RealtimeCallSession {
     async handleFunctionCall(event) {
         const generation = this.toolGeneration;
         const args = parseJsonObject(event.arguments);
+        this.log("realtime tool call started", {
+            name: event.name,
+            tool_call_id: event.call_id,
+            tenant: this.tenant,
+            argument_keys: Object.keys(args),
+        });
+
         const result = await callTool(
             event.name,
             {
@@ -449,6 +456,17 @@ class RealtimeCallSession {
             status: error.response && error.response.status,
             data: error.response && error.response.data,
         }));
+        this.log("realtime tool call completed", {
+            name: event.name,
+            tool_call_id: event.call_id,
+            ok: result.ok,
+            success: result.data && result.data.success,
+            status: result.status || null,
+            message: result.message || (result.data && result.data.message) || null,
+            options_count: Array.isArray(result.data && result.data.options)
+                ? result.data.options.length
+                : null,
+        });
 
         if (generation !== this.toolGeneration || this.closedAt) {
             this.log("realtime tool result ignored after interruption", {
@@ -475,6 +493,7 @@ class RealtimeCallSession {
     }
 
     handleInterruption(reason = "interrupted") {
+        const hasActiveResponse = this.outputActive && this.currentResponseId;
         this.toolGeneration += 1;
         this.outputActive = false;
 
@@ -482,11 +501,13 @@ class RealtimeCallSession {
             this.audioOutput.clear(reason);
         }
 
-        this.sendRealtimeEvent({
-            type: "response.cancel",
-        });
+        if (hasActiveResponse) {
+            this.sendRealtimeEvent({
+                type: "response.cancel",
+            });
+        }
 
-        if (this.currentAssistantItemId) {
+        if (hasActiveResponse && this.currentAssistantItemId) {
             this.sendRealtimeEvent({
                 type: "conversation.item.truncate",
                 item_id: this.currentAssistantItemId,

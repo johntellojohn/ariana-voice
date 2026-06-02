@@ -285,6 +285,13 @@ class RealtimeCallSession {
                 required: ["fecha_hora", "confirmado_por_cliente"],
                 additionalProperties: false,
             }),
+            functionTool("list_appointments", "Lista las citas existentes del cliente asociado a la llamada. Usala cuando pregunte si tiene citas, turnos, reservas o agendamientos.", {
+                type: "object",
+                properties: {
+                    solo_futuras: { type: "boolean" },
+                },
+                additionalProperties: false,
+            }),
             functionTool("save_call_event", "Guarda transcript o evento relevante de la llamada.", {
                 type: "object",
                 properties: {
@@ -469,6 +476,9 @@ class RealtimeCallSession {
             message: result.message || (result.data && result.data.message) || null,
             options_count: Array.isArray(result.data && result.data.options)
                 ? result.data.options.length
+                : null,
+            appointments_count: Array.isArray(result.data && result.data.appointments)
+                ? result.data.appointments.length
                 : null,
             matches_count: Array.isArray(result.data && result.data.matches)
                 ? result.data.matches.length

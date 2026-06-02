@@ -7,6 +7,7 @@ const TOOL_ENDPOINTS = {
     search_customer: "search-customer",
     check_availability: "check-availability",
     create_appointment: "create-appointment",
+    list_appointments: "list-appointments",
     save_call_event: "save-call-event",
 };
 

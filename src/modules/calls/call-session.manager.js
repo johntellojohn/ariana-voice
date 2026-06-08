@@ -2,6 +2,7 @@ const crypto = require("crypto");
 
 const CallSession = require("./call-session");
 const RealtimeCallSession = require("./realtime-call-session");
+const OutboundRealtimeCallSession = require("./outbound-realtime-call-session");
 
 const sessions = new Map();
 const sessionsByCallId = new Map();
@@ -21,6 +22,18 @@ function validateCreatePayload(payload) {
         const error = new Error("offer_sdp must be a valid SDP offer");
         error.status = 422;
         throw error;
+    }
+}
+
+function validateOutboundCreatePayload(payload) {
+    const requiredFields = ["call_id", "phone_number_id"];
+
+    for (const field of requiredFields) {
+        if (!payload[field]) {
+            const error = new Error(`${field} is required`);
+            error.status = 422;
+            throw error;
+        }
     }
 }
 
@@ -87,6 +100,56 @@ async function createSession(payload, options = {}) {
     };
 }
 
+async function createOutboundSession(payload, options = {}) {
+    validateOutboundCreatePayload(payload);
+
+    const existingSessionId = sessionsByCallId.get(payload.call_id);
+
+    if (existingSessionId) {
+        const existingSession = sessions.get(existingSessionId);
+
+        if (existingSession && !existingSession.closedAt) {
+            const error = new Error("A live session already exists for this call_id");
+            error.status = 409;
+            throw error;
+        }
+    }
+
+    const sessionId = crypto.randomUUID();
+    const session = new OutboundRealtimeCallSession(payload, {
+        sessionId,
+        baseUrl: options.baseUrl,
+        onClosed: removeSession,
+    });
+    const offerSdp = await session.start();
+
+    sessions.set(sessionId, session);
+    sessionsByCallId.set(payload.call_id, sessionId);
+
+    return {
+        session,
+        offerSdp,
+    };
+}
+
+async function applySessionAnswer(sessionId, answerSdp) {
+    const session = getSession(sessionId);
+
+    if (!session) {
+        const error = new Error("Call session not found");
+        error.status = 404;
+        throw error;
+    }
+
+    if (typeof session.applyAnswer !== "function") {
+        const error = new Error("Call session does not accept a delayed answer");
+        error.status = 409;
+        throw error;
+    }
+
+    return session.applyAnswer(answerSdp);
+}
+
 function removeSession(session) {
     sessions.delete(session.sessionId);
 
@@ -134,6 +197,8 @@ function selectSessionClass(payload) {
 
 module.exports = {
     createSession,
+    createOutboundSession,
+    applySessionAnswer,
     getSession,
     getSessionByCallId,
     closeSession,

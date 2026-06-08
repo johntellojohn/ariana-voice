@@ -1,5 +1,6 @@
 const wrtc = require("@roamhq/wrtc");
 const WebSocket = require("ws");
+const axios = require("axios");
 
 const env = require("../../config/env");
 const { callTool } = require("../laravel/voice-agent-tools.service");
@@ -21,7 +22,10 @@ class RealtimeCallSession {
         this.offerSdp = payload.offer_sdp;
         this.tenant = payload.tenant || null;
         this.agentId = payload.agent_id || null;
+        this.callbackUrl = payload.callback_url || null;
         this.toolsBaseUrl = payload.tools_base_url || null;
+        this.notificationOnly = Boolean(payload.notification_only);
+        this.hangupAfterInitialGreeting = Boolean(payload.hangup_after_initial_greeting);
         this.initialGreeting = normalizeInitialGreeting(payload.initial_greeting);
         this.initialGreetingPlaybackStarted = false;
         this.initialGreetingPending = Boolean(this.initialGreeting);
@@ -694,6 +698,25 @@ class RealtimeCallSession {
         );
     }
 
+    async sendCallback(payload) {
+        if (!this.callbackUrl) {
+            return null;
+        }
+
+        const response = await axios.post(this.callbackUrl, payload, {
+            headers: {
+                Accept: "application/json",
+                "Content-Type": "application/json",
+                Authorization: env.voiceApiToken
+                    ? `Bearer ${env.voiceApiToken}`
+                    : undefined,
+            },
+            timeout: env.callCallbackTimeoutMs,
+        });
+
+        return response.data;
+    }
+
     sendRealtimeEvent(event) {
         if (!this.realtimeSocket || this.realtimeSocket.readyState !== WebSocket.OPEN) {
             return;
@@ -815,6 +838,19 @@ class RealtimeCallSession {
             type: "call.closed",
         }).catch(() => {});
 
+        await this.sendCallback({
+            event: "ended",
+            session_id: this.sessionId,
+            call_id: this.callId,
+            reason,
+            tenant: this.tenant,
+            agent_id: this.agentId,
+            notification_only: this.notificationOnly,
+            hangup_meta: this.hangupAfterInitialGreeting,
+        }).catch((error) => {
+            console.error("Error sending realtime ended callback", error.message);
+        });
+
         if (this.onClosed) {
             this.onClosed(this);
         }
@@ -893,8 +929,11 @@ class RealtimeCallSession {
             initial_greeting_configured: Boolean(this.initialGreeting),
             initial_greeting_pending: this.initialGreetingPending,
             initial_greeting_played: this.initialGreetingPlayed,
+            notification_only: this.notificationOnly,
+            hangup_after_initial_greeting: this.hangupAfterInitialGreeting,
             created_at: this.createdAt.toISOString(),
             closed_at: this.closedAt ? this.closedAt.toISOString() : null,
+            callback_url: this.callbackUrl,
             tools_base_url: this.toolsBaseUrl,
         };
     }

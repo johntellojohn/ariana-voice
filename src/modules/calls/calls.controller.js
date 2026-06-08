@@ -30,6 +30,27 @@ async function createSession(req, res, next) {
     }
 }
 
+async function createOutboundSession(req, res, next) {
+    try {
+        const { session, offerSdp } = await callSessionManager.createOutboundSession(
+            req.body,
+            {
+                baseUrl: getBaseUrl(req),
+            }
+        );
+
+        res.json({
+            ok: true,
+            data: {
+                session_id: session.sessionId,
+                offer_sdp: offerSdp,
+            },
+        });
+    } catch (error) {
+        next(error);
+    }
+}
+
 function listSessions(req, res) {
     res.json({
         ok: true,
@@ -69,9 +90,27 @@ async function closeSession(req, res, next) {
     }
 }
 
+async function applySessionAnswer(req, res, next) {
+    try {
+        const snapshot = await callSessionManager.applySessionAnswer(
+            req.params.session_id,
+            req.body.answer_sdp || req.body.sdp || ""
+        );
+
+        res.json({
+            ok: true,
+            data: snapshot,
+        });
+    } catch (error) {
+        next(error);
+    }
+}
+
 module.exports = {
     createSession,
+    createOutboundSession,
     listSessions,
     showSession,
+    applySessionAnswer,
     closeSession,
 };

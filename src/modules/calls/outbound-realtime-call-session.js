@@ -37,7 +37,7 @@ class OutboundRealtimeCallSession extends RealtimeCallSession {
     }
 
     async applyAnswer(answerSdp) {
-        answerSdp = String(answerSdp || "").trim();
+        answerSdp = normalizeRemoteSdp(answerSdp);
 
         if (!answerSdp.startsWith("v=0")) {
             const error = new Error("answer_sdp must be a valid SDP answer");
@@ -55,12 +55,21 @@ class OutboundRealtimeCallSession extends RealtimeCallSession {
             return this.snapshot();
         }
 
-        await this.pc.setRemoteDescription(
-            new wrtc.RTCSessionDescription({
-                type: "answer",
-                sdp: answerSdp,
-            })
-        );
+        try {
+            await this.pc.setRemoteDescription(
+                new wrtc.RTCSessionDescription({
+                    type: "answer",
+                    sdp: answerSdp,
+                })
+            );
+        } catch (error) {
+            this.log("realtime outbound answer_sdp rejected", {
+                error: error.message,
+                sdp: summarizeSdp(answerSdp),
+            });
+
+            throw error;
+        }
 
         this.status = "answer_applied";
         this.markActivity("remote_answer_applied");
@@ -130,6 +139,30 @@ function waitForIceGatheringComplete(pc, timeoutMs) {
 
         pc.addEventListener("icegatheringstatechange", handleChange);
     });
+}
+
+function normalizeRemoteSdp(sdp) {
+    return String(sdp || "")
+        .replace(/\\r\\n/g, "\r\n")
+        .replace(/\\n/g, "\n")
+        .replace(/\\r/g, "\r")
+        .replace(/\r\n|\r|\n/g, "\r\n")
+        .trim();
+}
+
+function summarizeSdp(sdp) {
+    const lines = String(sdp || "").split(/\r\n|\r|\n/);
+    const invalidLines = lines
+        .map((line, index) => ({ line: index + 1, text: line.slice(0, 120) }))
+        .filter((entry) => entry.text !== "" && !/^[a-z]=/.test(entry.text))
+        .slice(0, 5);
+
+    return {
+        bytes: Buffer.byteLength(String(sdp || "")),
+        lines: lines.length,
+        first_line: lines[0] ? lines[0].slice(0, 80) : "",
+        invalid_lines: invalidLines,
+    };
 }
 
 module.exports = OutboundRealtimeCallSession;

@@ -34,7 +34,38 @@ async function testOutboundAnswerTriggersInitialGreeting() {
     assert.deepStrictEqual(calls, ["outbound_answer_applied"]);
 }
 
-testOutboundAnswerTriggersInitialGreeting().catch((error) => {
+async function testOutboundAnswerNormalizesEscapedLineBreaks() {
+    const session = new OutboundRealtimeCallSession(
+        {
+            call_id: "call-outbound-2",
+            phone_number_id: "phone-1",
+            realtime: {},
+        },
+        {
+            sessionId: "session-outbound-2",
+        }
+    );
+    let appliedSdp = "";
+
+    session.pc = {
+        remoteDescription: null,
+        currentRemoteDescription: null,
+        setRemoteDescription: async (description) => {
+            appliedSdp = description.sdp;
+            session.pc.remoteDescription = description;
+        },
+    };
+    session.playInitialGreeting = async () => false;
+
+    await session.applyAnswer("v=0\\r\\no=- 1 2 IN IP4 127.0.0.1\\r\\ns=-\\r\\nt=0 0");
+
+    assert.strictEqual(appliedSdp, "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0");
+}
+
+(async () => {
+    await testOutboundAnswerTriggersInitialGreeting();
+    await testOutboundAnswerNormalizesEscapedLineBreaks();
+})().catch((error) => {
     console.error(error);
     process.exit(1);
 });

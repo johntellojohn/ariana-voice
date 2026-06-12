@@ -104,16 +104,60 @@ class OutboundRealtimeCallSession extends RealtimeCallSession {
             this.initialGreetingPlayed &&
             ["response.output_audio.done", "response.done"].includes(event.type)
         ) {
-            this.notificationCloseScheduled = true;
-            setTimeout(() => {
-                this.close("notification_initial_greeting_completed").catch((error) => {
-                    this.log("could not close notification outbound session", {
-                        error: error.message,
-                    });
-                });
-            }, 800);
+            this.scheduleNotificationClose();
         }
     }
+
+    scheduleNotificationClose() {
+        if (this.notificationCloseScheduled) {
+            return;
+        }
+
+        this.notificationCloseScheduled = true;
+        setTimeout(() => {
+            this.closeAfterNotificationAudio().catch((error) => {
+                this.log("could not close notification outbound session", {
+                    error: error.message,
+                });
+            });
+        }, 800);
+    }
+
+    async closeAfterNotificationAudio() {
+        await this.waitForNotificationAudioDrained();
+
+        if (this.closedAt) {
+            return;
+        }
+
+        await this.close("notification_initial_greeting_completed");
+    }
+
+    async waitForNotificationAudioDrained() {
+        const startedAt = Date.now();
+        const timeoutMs = 30000;
+        let logged = false;
+
+        while (
+            this.audioOutput &&
+            this.audioOutput.hasPendingAudio &&
+            this.audioOutput.hasPendingAudio() &&
+            Date.now() - startedAt < timeoutMs
+        ) {
+            if (!logged) {
+                logged = true;
+                this.log("waiting for notification audio to finish before hangup", {
+                    timeout_ms: timeoutMs,
+                });
+            }
+
+            await wait(100);
+        }
+    }
+}
+
+function wait(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function waitForIceGatheringComplete(pc, timeoutMs) {

@@ -28,6 +28,7 @@ class RealtimeCallSession {
         this.hangupAfterInitialGreeting = Boolean(payload.hangup_after_initial_greeting);
         this.initialGreeting = normalizeInitialGreeting(payload.initial_greeting);
         this.initialGreetingPlaybackStarted = false;
+        this.initialGreetingPlaybackPreparing = false;
         this.initialGreetingPending = Boolean(this.initialGreeting);
         this.initialGreetingPlayed = false;
         this.realtime = payload.realtime || {};
@@ -627,6 +628,7 @@ class RealtimeCallSession {
     async playInitialGreeting(reason = "playback_ready") {
         if (
             !this.initialGreeting ||
+            this.initialGreetingPlaybackPreparing ||
             this.initialGreetingPlaybackStarted ||
             this.initialGreetingPlayed ||
             this.closedAt
@@ -645,16 +647,23 @@ class RealtimeCallSession {
             return false;
         }
 
-        this.initialGreetingPlaybackStarted = true;
+        this.initialGreetingPlaybackPreparing = true;
         this.initialGreetingPending = true;
 
         try {
-            await this.waitForPlaybackReady();
+            const playbackReady = await this.waitForPlaybackReady();
 
-            if (this.closedAt) {
+            if (!playbackReady || this.closedAt) {
+                this.log("realtime initial greeting deferred until ICE is ready", {
+                    reason,
+                    playback_ready: playbackReady,
+                    connection_state: this.pc ? this.pc.connectionState : null,
+                    ice_connection_state: this.pc ? this.pc.iceConnectionState : null,
+                });
                 return false;
             }
 
+            this.initialGreetingPlaybackStarted = true;
             this.log("realtime initial greeting requested", {
                 reason,
                 text_length: this.initialGreeting.length,
@@ -670,6 +679,7 @@ class RealtimeCallSession {
 
             return true;
         } finally {
+            this.initialGreetingPlaybackPreparing = false;
             this.initialGreetingPending = false;
         }
     }

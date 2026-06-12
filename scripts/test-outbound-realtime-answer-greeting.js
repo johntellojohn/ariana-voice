@@ -62,9 +62,50 @@ async function testOutboundAnswerNormalizesEscapedLineBreaks() {
     assert.strictEqual(appliedSdp, "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n");
 }
 
+async function testNotificationCloseWaitsForQueuedAudio() {
+    const session = new OutboundRealtimeCallSession(
+        {
+            call_id: "call-outbound-notification",
+            phone_number_id: "phone-1",
+            initial_greeting: "Hola, recuerda llegar a las ocho.",
+            notification_only: true,
+            hangup_after_initial_greeting: true,
+            realtime: {},
+        },
+        {
+            sessionId: "session-outbound-notification",
+        }
+    );
+    const closes = [];
+    let pendingAudio = true;
+
+    session.initialGreetingPlayed = true;
+    session.audioOutput = {
+        hasPendingAudio: () => pendingAudio,
+    };
+    session.close = async (reason) => {
+        closes.push(reason);
+    };
+
+    session.handleRealtimeEvent({ type: "response.done" });
+    await wait(900);
+
+    assert.deepStrictEqual(closes, []);
+
+    pendingAudio = false;
+    await wait(150);
+
+    assert.deepStrictEqual(closes, ["notification_initial_greeting_completed"]);
+}
+
+function wait(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 (async () => {
     await testOutboundAnswerTriggersInitialGreeting();
     await testOutboundAnswerNormalizesEscapedLineBreaks();
+    await testNotificationCloseWaitsForQueuedAudio();
 })().catch((error) => {
     console.error(error);
     process.exit(1);

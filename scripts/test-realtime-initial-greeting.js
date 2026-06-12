@@ -34,7 +34,40 @@ async function testInitialGreetingUsesExactText() {
     assert.doesNotMatch(events[0].response.instructions, /si encaja/);
 }
 
-testInitialGreetingUsesExactText().catch((error) => {
+async function testInitialGreetingWaitsForIceBeforeRequestingAudio() {
+    const session = new RealtimeCallSession(
+        {
+            call_id: "call-wait-ice",
+            initial_greeting: "Hola, este mensaje debe escucharse completo.",
+            realtime: {},
+        },
+        {
+            sessionId: "session-wait-ice",
+        }
+    );
+    const events = [];
+
+    session.realtimeReady = true;
+    session.audioOutput = {};
+    session.pc = {
+        connectionState: "connecting",
+        iceConnectionState: "checking",
+    };
+    session.waitForPlaybackReady = async () => false;
+    session.sendRealtimeEvent = (event) => events.push(event);
+
+    const played = await session.playInitialGreeting("test_wait_ice");
+
+    assert.strictEqual(played, false);
+    assert.strictEqual(events.length, 0);
+    assert.strictEqual(session.initialGreetingPlaybackStarted, false);
+    assert.strictEqual(session.initialGreetingPlayed, false);
+}
+
+(async () => {
+    await testInitialGreetingUsesExactText();
+    await testInitialGreetingWaitsForIceBeforeRequestingAudio();
+})().catch((error) => {
     console.error(error);
     process.exit(1);
 });

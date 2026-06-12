@@ -77,12 +77,18 @@ class OutboundRealtimeCallSession extends RealtimeCallSession {
             answer_sdp_bytes: answerSdp.length,
         });
 
-        this.playInitialGreeting("outbound_answer_applied").catch((error) => {
-            this.log("realtime outbound initial greeting failed", {
+        if (this.notificationOnly) {
+            this.log("notification outbound greeting waiting for remote media", {
                 reason: "outbound_answer_applied",
-                error: error.message,
             });
-        });
+        } else {
+            this.playInitialGreeting("outbound_answer_applied").catch((error) => {
+                this.log("realtime outbound initial greeting failed", {
+                    reason: "outbound_answer_applied",
+                    error: error.message,
+                });
+            });
+        }
 
         return this.snapshot();
     }

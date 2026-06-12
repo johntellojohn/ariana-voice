@@ -17,6 +17,7 @@ async function testInitialGreetingUsesExactText() {
     const events = [];
 
     session.realtimeReady = true;
+    session.remoteAudioFramesReceived = 1;
     session.audioOutput = {};
     session.pc = {
         connectionState: "connected",
@@ -51,6 +52,7 @@ async function testNotificationInitialGreetingUsesExactTtsPlayback() {
     const playedUrls = [];
 
     session.realtimeReady = true;
+    session.remoteAudioFramesReceived = 1;
     session.audioOutput = {};
     session.pc = {
         connectionState: "connected",

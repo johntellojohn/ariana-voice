@@ -62,6 +62,51 @@ async function testOutboundAnswerNormalizesEscapedLineBreaks() {
     assert.strictEqual(appliedSdp, "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n");
 }
 
+async function testNotificationAnswerWaitsForRemoteMediaBeforeGreeting() {
+    const session = new OutboundRealtimeCallSession(
+        {
+            call_id: "call-outbound-notification-answer",
+            phone_number_id: "phone-1",
+            initial_greeting: "Hola, escucha este mensaje desde el inicio.",
+            notification_only: true,
+            hangup_after_initial_greeting: true,
+            realtime: {},
+        },
+        {
+            sessionId: "session-outbound-notification-answer",
+        }
+    );
+    const calls = [];
+    const events = [];
+
+    session.realtimeReady = true;
+    session.pc = {
+        remoteDescription: null,
+        currentRemoteDescription: null,
+        setRemoteDescription: async (description) => {
+            session.pc.remoteDescription = description;
+        },
+    };
+    session.playInitialGreeting = async (reason) => {
+        calls.push(reason);
+        return true;
+    };
+    session.sendRealtimeEvent = (event) => events.push(event);
+
+    await session.applyAnswer("v=0\r\nfake-answer");
+
+    assert.deepStrictEqual(calls, []);
+
+    session.handleAudioData({
+        samples: new Int16Array([0, 0, 0, 0]),
+        sampleRate: 48000,
+        channelCount: 1,
+    });
+
+    assert.deepStrictEqual(calls, ["remote_audio_received"]);
+    assert.deepStrictEqual(events, []);
+}
+
 async function testNotificationCloseWaitsForQueuedAudio() {
     const session = new OutboundRealtimeCallSession(
         {
@@ -116,6 +161,7 @@ async function testNotificationTtsGreetingSchedulesCloseAfterPlayback() {
     const closes = [];
 
     session.realtimeReady = true;
+    session.remoteAudioFramesReceived = 1;
     session.audioOutput = {
         hasPendingAudio: () => false,
     };
@@ -144,6 +190,7 @@ function wait(ms) {
 (async () => {
     await testOutboundAnswerTriggersInitialGreeting();
     await testOutboundAnswerNormalizesEscapedLineBreaks();
+    await testNotificationAnswerWaitsForRemoteMediaBeforeGreeting();
     await testNotificationCloseWaitsForQueuedAudio();
     await testNotificationTtsGreetingSchedulesCloseAfterPlayback();
 })().catch((error) => {

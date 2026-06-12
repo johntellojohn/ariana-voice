@@ -42,6 +42,7 @@ class RealtimeCallSession {
         this.outboundTrack = null;
         this.sinks = [];
         this.remoteTracks = [];
+        this.remoteAudioFramesReceived = 0;
         this.realtimeSocket = null;
         this.realtimeReady = false;
         this.audioInputReady = false;
@@ -399,7 +400,15 @@ class RealtimeCallSession {
             return;
         }
 
+        this.remoteAudioFramesReceived += 1;
+
         if (this.notificationOnly) {
+            this.playInitialGreeting("remote_audio_received").catch((error) => {
+                this.log("realtime initial greeting failed", {
+                    reason: "remote_audio_received",
+                    error: error.message,
+                });
+            });
             return;
         }
 
@@ -667,6 +676,15 @@ class RealtimeCallSession {
                 realtime_ready: this.realtimeReady,
                 has_audio_output: Boolean(this.audioOutput),
                 has_peer_connection: Boolean(this.pc),
+            });
+
+            return false;
+        }
+
+        if (this.notificationOnly && this.remoteAudioFramesReceived < 1) {
+            this.log("notification initial greeting deferred until remote media is flowing", {
+                reason,
+                remote_audio_frames_received: this.remoteAudioFramesReceived,
             });
 
             return false;

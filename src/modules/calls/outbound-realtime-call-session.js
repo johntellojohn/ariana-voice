@@ -142,12 +142,15 @@ function waitForIceGatheringComplete(pc, timeoutMs) {
 }
 
 function normalizeRemoteSdp(sdp) {
-    return String(sdp || "")
+    const normalized = String(sdp || "")
         .replace(/\\r\\n/g, "\r\n")
         .replace(/\\n/g, "\n")
         .replace(/\\r/g, "\r")
         .replace(/\r\n|\r|\n/g, "\r\n")
-        .trim();
+        .trimStart()
+        .replace(/(?:\r\n)+$/g, "");
+
+    return normalized === "" ? "" : `${normalized}\r\n`;
 }
 
 function summarizeSdp(sdp) {

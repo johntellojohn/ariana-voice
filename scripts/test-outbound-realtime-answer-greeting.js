@@ -59,7 +59,7 @@ async function testOutboundAnswerNormalizesEscapedLineBreaks() {
 
     await session.applyAnswer("v=0\\r\\no=- 1 2 IN IP4 127.0.0.1\\r\\ns=-\\r\\nt=0 0");
 
-    assert.strictEqual(appliedSdp, "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0");
+    assert.strictEqual(appliedSdp, "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n");
 }
 
 (async () => {

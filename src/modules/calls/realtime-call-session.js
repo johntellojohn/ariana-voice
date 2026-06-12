@@ -681,15 +681,6 @@ class RealtimeCallSession {
             return false;
         }
 
-        if (this.notificationOnly && this.remoteAudioFramesReceived < 1) {
-            this.log("notification initial greeting deferred until remote media is flowing", {
-                reason,
-                remote_audio_frames_received: this.remoteAudioFramesReceived,
-            });
-
-            return false;
-        }
-
         this.initialGreetingPlaybackPreparing = true;
         this.initialGreetingPending = true;
 

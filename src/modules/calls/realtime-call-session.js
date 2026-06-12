@@ -1307,6 +1307,10 @@ function normalizeInitialGreeting(value) {
     return value.replace(/\s+/g, " ").trim();
 }
 
+function wait(ms) {
+    return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+}
+
 // Voices available only in the OpenAI Realtime API → closest TTS HTTP equivalent.
 // The TTS HTTP endpoint rejects any voice not in its own list and returns a 400
 // that, when uncaught inside playNotificationGreetingAudio, silently prevents

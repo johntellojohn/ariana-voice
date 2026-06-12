@@ -196,6 +196,8 @@ class RealtimeCallSession {
     }
 
     sessionConfig() {
+        const tools = this.notificationOnly ? [] : this.tools();
+
         return {
             type: "realtime",
             model: this.model(),
@@ -221,8 +223,8 @@ class RealtimeCallSession {
                     voice: this.voice(),
                 },
             },
-            tools: this.tools(),
-            tool_choice: "auto",
+            tools,
+            tool_choice: this.notificationOnly ? "none" : "auto",
             parallel_tool_calls: false,
         };
     }
@@ -335,6 +337,17 @@ class RealtimeCallSession {
     turnDetection() {
         const configured = this.realtime.turn_detection || {};
 
+        if (this.notificationOnly) {
+            return {
+                type: configured.type || "server_vad",
+                threshold: numberOr(configured.threshold, env.realtimeVadThreshold),
+                prefix_padding_ms: numberOr(configured.prefix_padding_ms, 300),
+                silence_duration_ms: numberOr(configured.silence_duration_ms, 500),
+                create_response: false,
+                interrupt_response: false,
+            };
+        }
+
         return {
             type: configured.type || "server_vad",
             threshold: numberOr(configured.threshold, env.realtimeVadThreshold),
@@ -383,6 +396,10 @@ class RealtimeCallSession {
 
     handleAudioData(data) {
         if (this.closedAt || !this.realtimeReady) {
+            return;
+        }
+
+        if (this.notificationOnly) {
             return;
         }
 
@@ -461,6 +478,13 @@ class RealtimeCallSession {
                 this.outputActive = true;
                 break;
             case "response.output_audio.delta":
+                if (this.notificationOnly) {
+                    this.log("notification realtime audio delta ignored", {
+                        response_id: event.response_id,
+                        item_id: event.item_id,
+                    });
+                    break;
+                }
                 this.playRealtimeAudio(event);
                 break;
             case "response.output_audio.done":

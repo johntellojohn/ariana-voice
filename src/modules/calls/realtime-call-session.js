@@ -4,6 +4,7 @@ const axios = require("axios");
 
 const env = require("../../config/env");
 const { callTool } = require("../laravel/voice-agent-tools.service");
+const ttsService = require("../tts/tts.service");
 const { AudioOutput } = require("./audio-output");
 const { SpeechInterruptionGate } = require("./speech-interruption-gate");
 const { int16ArrayToBuffer } = require("./wav.util");
@@ -667,7 +668,16 @@ class RealtimeCallSession {
             this.log("realtime initial greeting requested", {
                 reason,
                 text_length: this.initialGreeting.length,
+                notification_only: this.notificationOnly,
             });
+
+            if (this.notificationOnly) {
+                await this.playNotificationGreetingAudio(this.initialGreeting, reason);
+                this.initialGreetingPlayed = true;
+
+                return true;
+            }
+
             this.sendRealtimeEvent({
                 type: "response.create",
                 response: {
@@ -682,6 +692,56 @@ class RealtimeCallSession {
             this.initialGreetingPlaybackPreparing = false;
             this.initialGreetingPending = false;
         }
+    }
+
+    async playNotificationGreetingAudio(text, reason) {
+        this.log("notification initial greeting TTS requested", {
+            reason,
+            text_length: text.length,
+            voice: this.voice(),
+        });
+
+        const ttsResult = await ttsService.synthesize(
+            {
+                text,
+                voice: this.voice(),
+                format: "mp3",
+                instructions: "Lee este mensaje de notificacion de forma natural. No agregues saludos, preguntas ni frases finales.",
+            },
+            {
+                baseUrl: this.baseUrl,
+            }
+        );
+
+        if (!ttsResult.audio_url) {
+            throw new Error("Notification initial greeting TTS did not return audio_url");
+        }
+
+        this.outputActive = true;
+
+        let playback = null;
+
+        try {
+            playback = await this.audioOutput.enqueueAudioUrl(ttsResult.audio_url, {
+                source: "notification_initial_greeting",
+                reason,
+            });
+        } finally {
+            this.outputActive = false;
+            this.inputMutedUntil = Date.now() + env.callPostPlaybackMuteMs;
+            this.markActivity("notification_initial_greeting_played");
+            this.lastPlaybackAt = this.lastActivityAt;
+        }
+
+        this.log("notification initial greeting playback complete", {
+            reason,
+            audio_url: ttsResult.audio_url,
+            frames_sent: playback ? playback.framesSent : null,
+            frames_queued: playback ? playback.framesQueued : null,
+            pcm_bytes: playback ? playback.pcmBytes : null,
+            bytes_downloaded: playback ? playback.bytesDownloaded : null,
+            stopped: playback ? playback.stopped : null,
+        });
     }
 
     async saveTranscript(role, text, event) {

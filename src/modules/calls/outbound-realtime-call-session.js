@@ -88,7 +88,18 @@ class OutboundRealtimeCallSession extends RealtimeCallSession {
     }
 
     async playInitialGreeting(reason = "playback_ready") {
-        return super.playInitialGreeting(reason);
+        const played = await super.playInitialGreeting(reason);
+
+        if (
+            played &&
+            this.notificationOnly &&
+            this.hangupAfterInitialGreeting &&
+            this.initialGreetingPlayed
+        ) {
+            this.scheduleNotificationClose();
+        }
+
+        return played;
     }
 
     handleRealtimeEvent(event) {

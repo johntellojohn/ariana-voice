@@ -34,6 +34,46 @@ async function testInitialGreetingUsesExactText() {
     assert.doesNotMatch(events[0].response.instructions, /si encaja/);
 }
 
+async function testNotificationInitialGreetingUsesExactTtsPlayback() {
+    const session = new RealtimeCallSession(
+        {
+            call_id: "call-notification",
+            initial_greeting: "Hola Lizeth Guerra recuerda que debes llegar a la oficina.",
+            notification_only: true,
+            realtime: {},
+        },
+        {
+            sessionId: "session-notification",
+        }
+    );
+    const events = [];
+    const playedUrls = [];
+
+    session.realtimeReady = true;
+    session.audioOutput = {};
+    session.pc = {
+        connectionState: "connected",
+        iceConnectionState: "completed",
+    };
+    session.sendRealtimeEvent = (event) => events.push(event);
+    session.playNotificationGreetingAudio = async (text, reason) => {
+        playedUrls.push({ text, reason });
+        return true;
+    };
+
+    const played = await session.playInitialGreeting("test_notification");
+
+    assert.strictEqual(played, true);
+    assert.deepStrictEqual(events, []);
+    assert.deepStrictEqual(playedUrls, [
+        {
+            text: "Hola Lizeth Guerra recuerda que debes llegar a la oficina.",
+            reason: "test_notification",
+        },
+    ]);
+    assert.strictEqual(session.initialGreetingPlayed, true);
+}
+
 async function testInitialGreetingWaitsForIceBeforeRequestingAudio() {
     const session = new RealtimeCallSession(
         {
@@ -66,6 +106,7 @@ async function testInitialGreetingWaitsForIceBeforeRequestingAudio() {
 
 (async () => {
     await testInitialGreetingUsesExactText();
+    await testNotificationInitialGreetingUsesExactTtsPlayback();
     await testInitialGreetingWaitsForIceBeforeRequestingAudio();
 })().catch((error) => {
     console.error(error);

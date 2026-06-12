@@ -98,6 +98,45 @@ async function testNotificationCloseWaitsForQueuedAudio() {
     assert.deepStrictEqual(closes, ["notification_initial_greeting_completed"]);
 }
 
+async function testNotificationTtsGreetingSchedulesCloseAfterPlayback() {
+    const session = new OutboundRealtimeCallSession(
+        {
+            call_id: "call-outbound-notification-tts",
+            phone_number_id: "phone-1",
+            initial_greeting: "Hola Lizeth Guerra recuerda que debes llegar a la oficina.",
+            notification_only: true,
+            hangup_after_initial_greeting: true,
+            realtime: {},
+        },
+        {
+            sessionId: "session-outbound-notification-tts",
+        }
+    );
+    const events = [];
+    const closes = [];
+
+    session.realtimeReady = true;
+    session.audioOutput = {
+        hasPendingAudio: () => false,
+    };
+    session.pc = {
+        connectionState: "connected",
+        iceConnectionState: "completed",
+    };
+    session.sendRealtimeEvent = (event) => events.push(event);
+    session.playNotificationGreetingAudio = async () => true;
+    session.close = async (reason) => {
+        closes.push(reason);
+    };
+
+    const played = await session.playInitialGreeting("notification_tts_test");
+    await wait(900);
+
+    assert.strictEqual(played, true);
+    assert.deepStrictEqual(events, []);
+    assert.deepStrictEqual(closes, ["notification_initial_greeting_completed"]);
+}
+
 function wait(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -106,6 +145,7 @@ function wait(ms) {
     await testOutboundAnswerTriggersInitialGreeting();
     await testOutboundAnswerNormalizesEscapedLineBreaks();
     await testNotificationCloseWaitsForQueuedAudio();
+    await testNotificationTtsGreetingSchedulesCloseAfterPlayback();
 })().catch((error) => {
     console.error(error);
     process.exit(1);

@@ -746,6 +746,14 @@ class RealtimeCallSession {
         let playback = null;
 
         try {
+            if (env.callInitialPlaybackPrerollMs > 0) {
+                this.log("waiting before initial notification playback", {
+                    reason,
+                    delay_ms: env.callInitialPlaybackPrerollMs,
+                });
+                await this.wait(env.callInitialPlaybackPrerollMs);
+            }
+
             playback = await this.audioOutput.enqueueAudioUrl(ttsResult.audio_url, {
                 source: "notification_initial_greeting",
                 reason,
@@ -1052,6 +1060,10 @@ class RealtimeCallSession {
     markActivity(type) {
         this.lastActivityAt = Date.now();
         this.lastActivityType = type;
+    }
+
+    wait(ms) {
+        return wait(ms);
     }
 
     log(message, data = {}) {

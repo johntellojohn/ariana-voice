@@ -1,5 +1,6 @@
 const assert = require("assert");
 
+const ttsService = require("../src/modules/tts/tts.service");
 const RealtimeCallSession = require("../src/modules/calls/realtime-call-session");
 
 async function testInitialGreetingUsesExactText() {
@@ -133,6 +134,53 @@ async function testNotificationModeIgnoresRealtimeAudioDeltas() {
     assert.strictEqual(queued, 0);
 }
 
+async function testNotificationGreetingWaitsBeforeQueueingFirstAudioFrame() {
+    const session = new RealtimeCallSession(
+        {
+            call_id: "call-notification-preroll",
+            notification_only: true,
+            realtime: {},
+        },
+        {
+            sessionId: "session-notification-preroll",
+        }
+    );
+    const calls = [];
+
+    session.wait = async (ms) => {
+        calls.push(["wait", ms]);
+    };
+    session.audioOutput = {
+        enqueueAudioUrl: async (audioUrl) => {
+            calls.push(["enqueue", audioUrl]);
+            return {
+                framesSent: 1,
+                framesQueued: 1,
+                pcmBytes: 960,
+                bytesDownloaded: 128,
+                stopped: false,
+            };
+        },
+    };
+    session.waitForPlaybackReady = async () => true;
+
+    const originalSynthesize = ttsService.synthesize;
+
+    ttsService.synthesize = async () => ({
+        audio_url: "/api/audio/test.mp3",
+    });
+
+    try {
+        await session.playNotificationGreetingAudio("Hola, escucha desde el inicio.", "test_preroll");
+    } finally {
+        ttsService.synthesize = originalSynthesize;
+    }
+
+    assert.strictEqual(calls.length, 2);
+    assert.deepStrictEqual(calls[0], ["wait", 700]);
+    assert.deepStrictEqual(calls[1], ["enqueue", "/api/audio/test.mp3"]);
+}
+
 async function testInitialGreetingWaitsForIceBeforeRequestingAudio() {
     const session = new RealtimeCallSession(
         {
@@ -168,6 +216,7 @@ async function testInitialGreetingWaitsForIceBeforeRequestingAudio() {
     await testNotificationInitialGreetingUsesExactTtsPlayback();
     await testNotificationModeDoesNotStreamInboundAudioToRealtime();
     await testNotificationModeIgnoresRealtimeAudioDeltas();
+    await testNotificationGreetingWaitsBeforeQueueingFirstAudioFrame();
     await testInitialGreetingWaitsForIceBeforeRequestingAudio();
 })().catch((error) => {
     console.error(error);

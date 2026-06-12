@@ -17,7 +17,7 @@ class OutboundRealtimeCallSession extends RealtimeCallSession {
         this.pc.addTransceiver("audio", { direction: "sendrecv" });
 
         await this.setupOutboundAudio();
-        await this.connectRealtime();
+        await this.prepareRealtimeTransportForOutbound();
 
         const offer = await this.pc.createOffer({
             offerToReceiveAudio: true,
@@ -34,6 +34,19 @@ class OutboundRealtimeCallSession extends RealtimeCallSession {
         });
 
         return this.pc.localDescription.sdp;
+    }
+
+    async prepareRealtimeTransportForOutbound() {
+        if (!this.notificationOnly) {
+            await this.connectRealtime();
+            return;
+        }
+
+        this.realtimeReady = true;
+        this.audioInputReady = true;
+        this.log("notification outbound session using local TTS without realtime websocket", {
+            notification_only: true,
+        });
     }
 
     async applyAnswer(answerSdp) {

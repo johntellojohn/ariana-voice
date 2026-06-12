@@ -107,6 +107,32 @@ async function testNotificationAnswerWaitsForRemoteMediaBeforeGreeting() {
     assert.deepStrictEqual(events, []);
 }
 
+async function testNotificationOutboundSkipsRealtimeTransport() {
+    const session = new OutboundRealtimeCallSession(
+        {
+            call_id: "call-outbound-notification-no-realtime",
+            phone_number_id: "phone-1",
+            initial_greeting: "Hola, este es un mensaje de notificacion.",
+            notification_only: true,
+            hangup_after_initial_greeting: true,
+            realtime: {},
+        },
+        {
+            sessionId: "session-outbound-notification-no-realtime",
+        }
+    );
+    let realtimeConnections = 0;
+
+    session.connectRealtime = async () => {
+        realtimeConnections++;
+    };
+
+    await session.prepareRealtimeTransportForOutbound();
+
+    assert.strictEqual(realtimeConnections, 0);
+    assert.strictEqual(session.realtimeReady, true);
+}
+
 async function testNotificationCloseWaitsForQueuedAudio() {
     const session = new OutboundRealtimeCallSession(
         {
@@ -191,6 +217,7 @@ function wait(ms) {
     await testOutboundAnswerTriggersInitialGreeting();
     await testOutboundAnswerNormalizesEscapedLineBreaks();
     await testNotificationAnswerWaitsForRemoteMediaBeforeGreeting();
+    await testNotificationOutboundSkipsRealtimeTransport();
     await testNotificationCloseWaitsForQueuedAudio();
     await testNotificationTtsGreetingSchedulesCloseAfterPlayback();
 })().catch((error) => {

@@ -32,6 +32,8 @@ const TTS_MIME_TYPES = {
 
 const TTS_MODELS = ["gpt-4o-mini-tts", "gpt-4o-mini-tts-2025-12-15", "tts-1", "tts-1-hd"];
 
+// Voices valid for the standard TTS HTTP endpoint (audio.speech.create).
+// "marin" is intentionally excluded — it exists ONLY in the Realtime API.
 const TTS_VOICES = [
     "alloy",
     "ash",
@@ -39,7 +41,6 @@ const TTS_VOICES = [
     "coral",
     "echo",
     "fable",
-    "marin",
     "nova",
     "onyx",
     "sage",
@@ -47,6 +48,9 @@ const TTS_VOICES = [
     "verse",
     "cedar",
 ];
+
+// Voices available in the Realtime API (superset — includes Realtime-only voices).
+const REALTIME_VOICES = [...TTS_VOICES, "marin"];
 
 const STT_MODELS = [
     "gpt-4o-mini-transcribe",
@@ -63,5 +67,6 @@ module.exports = {
     TTS_MIME_TYPES,
     TTS_MODELS,
     TTS_VOICES,
+    REALTIME_VOICES,
     STT_MODELS,
 };

@@ -737,16 +737,23 @@ class RealtimeCallSession {
     }
 
     async playNotificationGreetingAudio(text, reason) {
+        // Some voices (e.g. "marin") exist only in the OpenAI Realtime API and
+        // are NOT accepted by the standard TTS HTTP endpoint — sending them
+        // causes a 400 error that silently aborts playback.  Map them to the
+        // closest valid TTS voice before calling synthesize().
+        const ttsVoice = toTtsVoice(this.voice());
+
         this.log("notification initial greeting TTS requested", {
             reason,
             text_length: text.length,
             voice: this.voice(),
+            tts_voice: ttsVoice,
         });
 
         const ttsResult = await ttsService.synthesize(
             {
                 text,
-                voice: this.voice(),
+                voice: ttsVoice,
                 format: "mp3",
                 instructions: "Lee este mensaje de notificacion de forma natural. No agregues saludos, preguntas ni frases finales.",
             },
@@ -1298,6 +1305,29 @@ function normalizeInitialGreeting(value) {
     }
 
     return value.replace(/\s+/g, " ").trim();
+}
+
+// Voices available only in the OpenAI Realtime API → closest TTS HTTP equivalent.
+// The TTS HTTP endpoint rejects any voice not in its own list and returns a 400
+// that, when uncaught inside playNotificationGreetingAudio, silently prevents
+// the notification audio from being enqueued.
+const REALTIME_TO_TTS_VOICE_MAP = {
+    marin: "nova",
+    // Add further mappings here if new Realtime-only voices are introduced.
+};
+
+// Valid voices for the standard TTS HTTP endpoint (audio.speech.create).
+const TTS_HTTP_VOICES = new Set([
+    "alloy", "ash", "ballad", "coral", "echo", "fable",
+    "nova", "onyx", "sage", "shimmer", "verse", "cedar",
+]);
+
+function toTtsVoice(voice) {
+    if (TTS_HTTP_VOICES.has(voice)) {
+        return voice;
+    }
+
+    return REALTIME_TO_TTS_VOICE_MAP[voice] || "nova";
 }
 
 module.exports = RealtimeCallSession;

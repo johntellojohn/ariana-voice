@@ -10,6 +10,7 @@ class AudioOutput {
         this.channelCount = options.channelCount || 1;
         this.frameMs = options.frameMs || 10;
         this.logger = options.logger || null;
+        this.logAudioChunks = Boolean(options.logAudioChunks);
         this.frameSamples = Math.round((this.sampleRate * this.frameMs) / 1000);
         this.frameBytes = this.frameSamples * this.channelCount * 2;
         this.silenceLogEveryFrames =
@@ -96,16 +97,18 @@ class AudioOutput {
         this.playbackJobId = id;
         this.buffer = Buffer.concat([this.buffer, paddedBuffer]);
 
-        this.log("audio output queued", {
-            id,
-            pcm_bytes: pcmBuffer.length,
-            padded_bytes: paddedBuffer.length,
-            frames_queued: framesQueued,
-            frame_ms: this.frameMs,
-            sample_rate: this.sampleRate,
-            channel_count: this.channelCount,
-            metadata,
-        });
+        if (this.logAudioChunks) {
+            this.log("audio output queued", {
+                id,
+                pcm_bytes: pcmBuffer.length,
+                padded_bytes: paddedBuffer.length,
+                frames_queued: framesQueued,
+                frame_ms: this.frameMs,
+                sample_rate: this.sampleRate,
+                channel_count: this.channelCount,
+                metadata,
+            });
+        }
 
         return new Promise((resolve) => {
             this.playbackJobs.push({
@@ -295,15 +298,17 @@ class AudioOutput {
                     metadata: job.metadata,
                 };
 
-                this.log("audio output sent", {
-                    id: result.id,
-                    frames_sent: result.framesSent,
-                    frames_queued: result.framesQueued,
-                    pcm_bytes: result.pcmBytes,
-                    padded_bytes: result.paddedBytes,
-                    duration_ms: result.durationMs,
-                    metadata: result.metadata,
-                });
+                if (this.logAudioChunks) {
+                    this.log("audio output sent", {
+                        id: result.id,
+                        frames_sent: result.framesSent,
+                        frames_queued: result.framesQueued,
+                        pcm_bytes: result.pcmBytes,
+                        padded_bytes: result.paddedBytes,
+                        duration_ms: result.durationMs,
+                        metadata: result.metadata,
+                    });
+                }
 
                 job.resolve(result);
             }

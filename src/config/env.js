@@ -71,6 +71,7 @@ const env = {
     callTurnMaxMs: toNumber(process.env.CALL_TURN_MAX_MS, 15000),
     callSilenceFrameMs: toNumber(process.env.CALL_SILENCE_FRAME_MS, 10),
     callSilenceLogEveryFrames: toNumber(process.env.CALL_SILENCE_LOG_EVERY_FRAMES, 6000),
+    callAudioDebug: toBoolean(process.env.CALL_AUDIO_DEBUG, false),
     callIdleTimeoutMs: toNumber(process.env.CALL_IDLE_TIMEOUT_MS, 60000),
     callMaxDurationMs: toNumber(process.env.CALL_MAX_DURATION_MS, 1800000),
     callPostPlaybackMuteMs: toNumber(process.env.CALL_POST_PLAYBACK_MUTE_MS, 800),

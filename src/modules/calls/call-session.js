@@ -107,6 +107,7 @@ class CallSession {
         this.audioOutput = new AudioOutput(this.audioSource, {
             frameMs: env.callSilenceFrameMs,
             silenceLogEveryFrames: env.callSilenceLogEveryFrames,
+            logAudioChunks: env.callAudioDebug,
             logger: (message, data) => this.log(message, data),
         });
 

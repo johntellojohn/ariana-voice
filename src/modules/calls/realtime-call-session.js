@@ -103,6 +103,7 @@ class RealtimeCallSession {
             sampleRate: META_SAMPLE_RATE,
             frameMs: env.callSilenceFrameMs,
             silenceLogEveryFrames: env.callSilenceLogEveryFrames,
+            logAudioChunks: env.callAudioDebug,
             logger: (message, data) => this.log(message, data),
         });
 

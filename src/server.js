@@ -1,9 +1,12 @@
 const app = require("./app");
 const env = require("./config/env");
+const { attachCallWebSocketServer } = require("./modules/calls/calls.websocket");
 
 const server = app.listen(env.port, () => {
     console.log(`${env.appName} running on port ${env.port}`);
 });
+
+attachCallWebSocketServer(server);
 
 process.on("SIGTERM", () => {
     console.log("SIGTERM received. Closing server...");

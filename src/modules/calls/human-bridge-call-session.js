@@ -26,6 +26,7 @@ class HumanBridgeCallSession {
         this.agentOutboundTrack = null;
         this.metaSink = null;
         this.agentSink = null;
+        this.agentWs = null;
         this.metaFramesReceived = 0;
         this.agentFramesReceived = 0;
         this.activeAgentId = null;
@@ -107,6 +108,8 @@ class HumanBridgeCallSession {
             if (this.agentAudioSource) {
                 this.agentAudioSource.onData(data);
             }
+
+            this.sendMetaAudioToAgentWebSocket(data);
         };
 
         this.status = "meta_connected";
@@ -230,6 +233,96 @@ class HumanBridgeCallSession {
         });
     }
 
+    attachAgentWebSocket(ws, options = {}) {
+        if (this.closedAt) {
+            ws.close(1011, "session_closed");
+            return;
+        }
+
+        if (this.agentWs && this.agentWs.readyState === 1) {
+            this.agentWs.close(1000, "agent_replaced");
+        }
+
+        this.agentWs = ws;
+        this.activeAgentId = options.agentId || options.agent_id || this.activeAgentId;
+        this.status = "agent_ws_connected";
+        this.markActivity("agent_ws_connected");
+        this.log("human bridge agent websocket connected", {
+            agent_id: this.activeAgentId,
+        });
+
+        ws.on("message", (message, isBinary) => {
+            if (!isBinary || this.closedAt || !this.metaAudioSource) {
+                return;
+            }
+
+            const buffer = Buffer.isBuffer(message) ? message : Buffer.from(message);
+
+            if (buffer.length < 2) {
+                return;
+            }
+
+            const samples = new Int16Array(
+                buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
+            );
+
+            if (samples.length === 0) {
+                return;
+            }
+
+            this.agentFramesReceived += 1;
+            this.markActivity("agent_ws_audio");
+            this.metaAudioSource.onData({
+                samples,
+                sampleRate: 48000,
+                bitsPerSample: 16,
+                channelCount: 1,
+                numberOfFrames: samples.length,
+            });
+        });
+
+        ws.on("close", (code, reason) => {
+            if (this.agentWs === ws) {
+                this.agentWs = null;
+            }
+
+            this.markActivity("agent_ws_closed");
+            this.log("human bridge agent websocket closed", {
+                agent_id: this.activeAgentId,
+                code,
+                reason: reason ? reason.toString() : "",
+            });
+        });
+
+        ws.on("error", (error) => {
+            this.log("human bridge agent websocket error", {
+                agent_id: this.activeAgentId,
+                error: error.message,
+            });
+        });
+    }
+
+    sendMetaAudioToAgentWebSocket(data) {
+        if (!this.agentWs || this.agentWs.readyState !== 1) {
+            return;
+        }
+
+        const samples = data && data.samples;
+
+        if (!samples || samples.byteLength === 0) {
+            return;
+        }
+
+        try {
+            const buffer = Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength);
+            this.agentWs.send(buffer, { binary: true });
+        } catch (error) {
+            this.log("human bridge agent websocket send failed", {
+                error: error.message,
+            });
+        }
+    }
+
     async closeAgentPeer(reason = "agent_closed") {
         if (this.agentSink) {
             this.agentSink.stop();
@@ -249,6 +342,11 @@ class HumanBridgeCallSession {
             this.agentPc = null;
         }
 
+        if (this.agentWs && this.agentWs.readyState === 1) {
+            this.agentWs.close(1000, reason);
+        }
+
+        this.agentWs = null;
         this.agentAudioSource = null;
         this.activeAgentId = null;
         this.markActivity(reason);
@@ -336,6 +434,7 @@ class HumanBridgeCallSession {
             agent_frames_received: this.agentFramesReceived,
             has_meta_peer: Boolean(this.metaPc),
             has_agent_peer: Boolean(this.agentPc),
+            has_agent_ws: Boolean(this.agentWs),
         };
     }
 

@@ -123,7 +123,7 @@ class HumanBridgeCallSession {
     }
 
     async connectAgent(agentOfferSdp, options = {}) {
-        agentOfferSdp = normalizeSdp(agentOfferSdp);
+        agentOfferSdp = normalizeRemoteSdp(agentOfferSdp);
 
         if (!agentOfferSdp.startsWith("v=0")) {
             const error = new Error("agent offer_sdp must be a valid SDP offer");
@@ -150,12 +150,22 @@ class HumanBridgeCallSession {
         this.agentPc.onconnectionstatechange = () => this.handlePeerState("agent", this.agentPc.connectionState);
         this.agentPc.oniceconnectionstatechange = () => this.handleIceState("agent", this.agentPc.iceConnectionState);
 
-        await this.agentPc.setRemoteDescription(
-            new wrtc.RTCSessionDescription({
-                type: "offer",
-                sdp: agentOfferSdp,
-            })
-        );
+        try {
+            await this.agentPc.setRemoteDescription(
+                new wrtc.RTCSessionDescription({
+                    type: "offer",
+                    sdp: agentOfferSdp,
+                })
+            );
+        } catch (error) {
+            this.log("human bridge agent offer_sdp rejected", {
+                error: error.message,
+                sdp: summarizeSdp(agentOfferSdp),
+            });
+
+            await this.closeAgentPeer("agent_offer_rejected");
+            throw error;
+        }
 
         const transceiver = findAudioTransceiver(this.agentPc);
 
@@ -337,8 +347,36 @@ class HumanBridgeCallSession {
     }
 }
 
-function normalizeSdp(value) {
-    return String(value || "").replace(/\r?\n/g, "\r\n").trim();
+function normalizeRemoteSdp(sdp) {
+    const normalized = String(sdp || "")
+        .replace(/\\r\\n/g, "\r\n")
+        .replace(/\\n/g, "\n")
+        .replace(/\\r/g, "\r")
+        .replace(/\r\n|\r|\n/g, "\r\n")
+        .split("\r\n")
+        .filter((line) => line.trim() !== "")
+        .filter((line) => line.trim() !== "a=extmap-allow-mixed")
+        .join("\r\n")
+        .trimStart()
+        .replace(/(?:\r\n)+$/g, "");
+
+    return normalized === "" ? "" : `${normalized}\r\n`;
+}
+
+function summarizeSdp(sdp) {
+    const lines = String(sdp || "").split(/\r\n|\r|\n/);
+    const invalidLines = lines
+        .map((line, index) => ({ line: index + 1, text: line.slice(0, 140) }))
+        .filter((entry) => entry.text !== "" && !/^[a-z]=/.test(entry.text))
+        .slice(0, 10);
+
+    return {
+        bytes: Buffer.byteLength(String(sdp || "")),
+        lines: lines.length,
+        first_line: lines[0] ? lines[0].slice(0, 80) : "",
+        has_extmap_allow_mixed: lines.some((line) => line.trim() === "a=extmap-allow-mixed"),
+        invalid_lines: invalidLines,
+    };
 }
 
 function findAudioTransceiver(pc) {

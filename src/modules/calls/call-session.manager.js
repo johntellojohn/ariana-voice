@@ -3,6 +3,7 @@ const crypto = require("crypto");
 const CallSession = require("./call-session");
 const RealtimeCallSession = require("./realtime-call-session");
 const OutboundRealtimeCallSession = require("./outbound-realtime-call-session");
+const HumanBridgeCallSession = require("./human-bridge-call-session");
 
 const sessions = new Map();
 const sessionsByCallId = new Map();
@@ -150,6 +151,24 @@ async function applySessionAnswer(sessionId, answerSdp) {
     return session.applyAnswer(answerSdp);
 }
 
+async function connectAgent(sessionId, offerSdp, options = {}) {
+    const session = getSession(sessionId);
+
+    if (!session) {
+        const error = new Error("Call session not found");
+        error.status = 404;
+        throw error;
+    }
+
+    if (typeof session.connectAgent !== "function") {
+        const error = new Error("Call session does not accept agent bridge connections");
+        error.status = 409;
+        throw error;
+    }
+
+    return session.connectAgent(offerSdp, options);
+}
+
 function removeSession(session) {
     sessions.delete(session.sessionId);
 
@@ -188,6 +207,10 @@ function listSessions() {
 }
 
 function selectSessionClass(payload) {
+    if (payload && payload.mode === "human_bridge") {
+        return HumanBridgeCallSession;
+    }
+
     if (payload && (payload.mode === "realtime" || payload.realtime)) {
         return RealtimeCallSession;
     }
@@ -199,6 +222,7 @@ module.exports = {
     createSession,
     createOutboundSession,
     applySessionAnswer,
+    connectAgent,
     getSession,
     getSessionByCallId,
     closeSession,

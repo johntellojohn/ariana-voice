@@ -106,11 +106,34 @@ async function applySessionAnswer(req, res, next) {
     }
 }
 
+async function connectAgent(req, res, next) {
+    try {
+        const { answer_sdp: answerSdp, snapshot } = await callSessionManager.connectAgent(
+            req.params.session_id,
+            req.body.offer_sdp || req.body.sdp || "",
+            {
+                agent_id: req.body.agent_id || req.body.agentId || null,
+            }
+        );
+
+        res.json({
+            ok: true,
+            data: {
+                answer_sdp: answerSdp,
+                session: snapshot,
+            },
+        });
+    } catch (error) {
+        next(error);
+    }
+}
+
 module.exports = {
     createSession,
     createOutboundSession,
     listSessions,
     showSession,
     applySessionAnswer,
+    connectAgent,
     closeSession,
 };

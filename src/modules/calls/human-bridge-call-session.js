@@ -266,15 +266,15 @@ class HumanBridgeCallSession {
                 return;
             }
 
-            this.metaAudioOutput.enqueuePcm(generateWaitTonePcm(), {
-                source: "human_bridge_wait_tone",
+            this.metaAudioOutput.enqueuePcm(generateWaitMusicPcm(), {
+                source: "human_bridge_wait_music",
             }).catch((error) => {
-                this.log("human bridge waiting tone failed", {
+                this.log("human bridge waiting music failed", {
                     error: error.message,
                 });
             });
 
-            this.markActivity("waiting_tone_queued");
+            this.markActivity("waiting_music_queued");
         };
 
         enqueueTone();
@@ -795,18 +795,38 @@ function normalizeWaitMessage(value) {
     return value.replace(/\s+/g, " ").trim();
 }
 
-function generateWaitTonePcm() {
-    const durationSeconds = 1.4;
+function generateWaitMusicPcm() {
+    const durationSeconds = 4.2;
     const totalSamples = Math.round(TONE_SAMPLE_RATE * durationSeconds);
     const samples = new Int16Array(totalSamples);
-    const amplitude = 0.16 * 0x7fff;
-    const fadeSamples = Math.round(TONE_SAMPLE_RATE * 0.08);
+    const amplitude = 0.12 * 0x7fff;
+    const fadeSamples = Math.round(TONE_SAMPLE_RATE * 0.12);
+    const notes = [
+        392.00,
+        493.88,
+        587.33,
+        493.88,
+        440.00,
+        523.25,
+        659.25,
+        523.25,
+    ];
+    const noteDuration = durationSeconds / notes.length;
 
     for (let index = 0; index < totalSamples; index++) {
         const t = index / TONE_SAMPLE_RATE;
+        const noteIndex = Math.min(notes.length - 1, Math.floor(t / noteDuration));
+        const noteStart = noteIndex * noteDuration;
+        const noteT = Math.max(0, t - noteStart);
+        const noteEnvelope = Math.min(1, noteT / 0.08, (noteDuration - noteT) / 0.18);
         const envelope = Math.min(1, index / fadeSamples, (totalSamples - index) / fadeSamples);
-        const tone = Math.sin(2 * Math.PI * 440 * t) * 0.62 + Math.sin(2 * Math.PI * 554.37 * t) * 0.38;
-        samples[index] = Math.round(tone * amplitude * Math.max(0, envelope));
+        const frequency = notes[noteIndex];
+        const tone =
+            Math.sin(2 * Math.PI * frequency * t) * 0.62 +
+            Math.sin(2 * Math.PI * frequency * 1.5 * t) * 0.18 +
+            Math.sin(2 * Math.PI * frequency * 0.5 * t) * 0.20;
+
+        samples[index] = Math.round(tone * amplitude * Math.max(0, envelope) * Math.max(0, noteEnvelope));
     }
 
     return Buffer.from(samples.buffer);

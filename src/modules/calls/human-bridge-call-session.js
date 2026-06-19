@@ -215,6 +215,7 @@ class HumanBridgeCallSession {
                 text: this.waitMessage,
                 voice: "nova",
                 format: "mp3",
+                return_audio_base64: true,
                 instructions: "Lee este mensaje de espera de forma calmada y natural. No agregues frases nuevas.",
             },
             {
@@ -222,18 +223,32 @@ class HumanBridgeCallSession {
             }
         );
 
-        if (!ttsResult.audio_url) {
-            throw new Error("Waiting TTS did not return audio_url");
-        }
+        let playback;
 
-        const playback = await this.metaAudioOutput.enqueueAudioUrl(ttsResult.audio_url, {
-            source: "human_bridge_wait_message",
-            reason,
-        });
+        if (ttsResult.audio_base64) {
+            const audioBuffer = Buffer.from(ttsResult.audio_base64, "base64");
+
+            playback = await this.metaAudioOutput.enqueueAudioBuffer(audioBuffer, {
+                source: "human_bridge_wait_message",
+                reason,
+                format: ttsResult.format || "mp3",
+                mime_type: ttsResult.mime_type || "audio/mpeg",
+            });
+        } else {
+            if (!ttsResult.audio_url) {
+                throw new Error("Waiting TTS did not return audio_base64 or audio_url");
+            }
+
+            playback = await this.metaAudioOutput.enqueueAudioUrl(ttsResult.audio_url, {
+                source: "human_bridge_wait_message",
+                reason,
+            });
+        }
 
         this.markActivity("waiting_message_played");
         this.log("human bridge waiting message playback complete", {
-            audio_url: ttsResult.audio_url,
+            delivery: ttsResult.audio_base64 ? "base64" : "audio_url",
+            audio_url: ttsResult.audio_url || null,
             frames_sent: playback.framesSent,
             frames_queued: playback.framesQueued,
             stopped: playback.stopped,

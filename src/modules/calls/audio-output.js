@@ -160,6 +160,47 @@ class AudioOutput {
         return this.enqueuePcm(pcm, metadata);
     }
 
+    async enqueueAudioBuffer(audioBuffer, metadata = {}) {
+        if (!audioBuffer || !audioBuffer.length) {
+            return {
+                framesQueued: 0,
+                framesSent: 0,
+                pcmBytes: 0,
+                metadata,
+            };
+        }
+
+        const extension = normalizeAudioExtension(metadata.extension || metadata.format);
+        const filePath = path.join(
+            os.tmpdir(),
+            `ariana-call-audio-buffer-${Date.now()}-${Math.random().toString(16).slice(2)}.${extension}`
+        );
+
+        await fsp.writeFile(filePath, audioBuffer);
+
+        this.log("audio buffer written for playback", {
+            file_path: filePath,
+            bytes: audioBuffer.length,
+            extension,
+            metadata,
+        });
+
+        try {
+            const playback = await this.enqueueFile(filePath, {
+                ...metadata,
+                source_type: "buffer",
+            });
+
+            return {
+                ...playback,
+                bytesDownloaded: 0,
+                contentType: metadata.mime_type || "",
+            };
+        } finally {
+            await fsp.unlink(filePath).catch(() => {});
+        }
+    }
+
     async enqueueAudioUrl(audioUrl, metadata = {}) {
         const downloaded = await downloadAudioToTemp(audioUrl);
 
@@ -320,6 +361,12 @@ class AudioOutput {
             this.logger(message, data);
         }
     }
+}
+
+function normalizeAudioExtension(value) {
+    const extension = String(value || "mp3").toLowerCase().replace(/^\./, "");
+
+    return ["mp3", "wav", "opus", "aac", "flac"].includes(extension) ? extension : "mp3";
 }
 
 function bufferToExactInt16Frame(buffer, frameSamples, channelCount) {

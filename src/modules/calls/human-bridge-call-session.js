@@ -362,7 +362,7 @@ class HumanBridgeCallSession {
 
         for (let offset = 0; offset < completeFramesLength; offset += RTC_AUDIO_FRAME_SAMPLES) {
             this.metaAudioSource.onData({
-                samples: samples.subarray(offset, offset + RTC_AUDIO_FRAME_SAMPLES),
+                samples: new Int16Array(samples.subarray(offset, offset + RTC_AUDIO_FRAME_SAMPLES)),
                 sampleRate: 48000,
                 bitsPerSample: 16,
                 channelCount: 1,

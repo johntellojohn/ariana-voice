@@ -255,7 +255,7 @@ Callback de transcripcion hacia Laravel:
   "call_id": "wamid/HBg...",
   "sequence": 1,
   "text": "Hola, quiero agendar una cita",
-  "audio_url": "http://sigcenter.ddns.net:328/api/audio/inbound-uuid-1.wav",
+  "audio_url": "https://sigcenter.ddns.net:328/api/audio/inbound-uuid-1.wav",
   "tenant": "sigcrm_intelho",
   "agent_id": 1
 }

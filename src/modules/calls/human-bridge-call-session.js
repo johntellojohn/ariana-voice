@@ -1,9 +1,12 @@
 const wrtc = require("@roamhq/wrtc");
 
 const env = require("../../config/env");
+const ttsService = require("../tts/tts.service");
+const { AudioOutput } = require("./audio-output");
 
 const { RTCAudioSink, RTCAudioSource } = wrtc.nonstandard;
 const RTC_AUDIO_FRAME_SAMPLES = 480;
+const TONE_SAMPLE_RATE = 48000;
 
 class HumanBridgeCallSession {
     constructor(payload, options = {}) {
@@ -15,6 +18,9 @@ class HumanBridgeCallSession {
         this.offerSdp = payload.offer_sdp;
         this.tenant = payload.tenant || null;
         this.agentId = payload.agent_id || null;
+        this.waitMessage = normalizeWaitMessage(payload.wait_message);
+        this.waitToneEnabled = payload.wait_tone_enabled !== false;
+        this.waitPosition = Number(payload.wait_position || 0) || 0;
         this.createdAt = new Date();
         this.closedAt = null;
         this.status = "created";
@@ -22,6 +28,7 @@ class HumanBridgeCallSession {
         this.metaPc = null;
         this.agentPc = null;
         this.metaAudioSource = null;
+        this.metaAudioOutput = null;
         this.agentAudioSource = null;
         this.metaOutboundTrack = null;
         this.agentOutboundTrack = null;
@@ -34,6 +41,9 @@ class HumanBridgeCallSession {
         this.agentWsFramesReceived = 0;
         this.agentWsSampleRemainder = null;
         this.activeAgentId = null;
+        this.waitPlaybackStarted = false;
+        this.waitPlaybackPreparing = false;
+        this.waitToneTimer = null;
         this.lastActivityAt = Date.now();
         this.lastActivityType = "created";
     }
@@ -72,6 +82,13 @@ class HumanBridgeCallSession {
 
     async setupMetaOutboundAudio() {
         this.metaAudioSource = new RTCAudioSource();
+        this.metaAudioOutput = new AudioOutput(this.metaAudioSource, {
+            sampleRate: TONE_SAMPLE_RATE,
+            frameMs: env.callSilenceFrameMs,
+            silenceLogEveryFrames: env.callSilenceLogEveryFrames,
+            logAudioChunks: env.callAudioDebug,
+            logger: (message, data) => this.log(message, data),
+        });
         this.metaOutboundTrack = this.metaAudioSource.createTrack();
 
         const transceiver = findAudioTransceiver(this.metaPc);
@@ -88,6 +105,10 @@ class HumanBridgeCallSession {
             }
         } else {
             this.metaPc.addTrack(this.metaOutboundTrack);
+        }
+
+        if (this.waitMessage || this.waitToneEnabled) {
+            this.metaAudioOutput.start();
         }
     }
 
@@ -122,11 +143,138 @@ class HumanBridgeCallSession {
             ready_state: track.readyState,
         });
 
+        this.startWaitingPlayback("meta_track_attached").catch((error) => {
+            this.log("human bridge waiting playback failed", {
+                reason: "meta_track_attached",
+                error: error.message,
+            });
+        });
+
         track.onended = () => {
             this.close("meta_track_ended").catch((error) => {
                 console.error("Error closing human bridge on meta track end", error);
             });
         };
+    }
+
+    async startWaitingPlayback(reason = "waiting_ready") {
+        if (
+            this.closedAt ||
+            this.agentWs ||
+            this.agentPc ||
+            this.waitPlaybackStarted ||
+            this.waitPlaybackPreparing ||
+            (!this.waitMessage && !this.waitToneEnabled) ||
+            !this.metaAudioOutput
+        ) {
+            return false;
+        }
+
+        this.waitPlaybackPreparing = true;
+
+        try {
+            await this.waitForMetaPlaybackReady();
+
+            if (this.closedAt || this.agentWs || this.agentPc) {
+                return false;
+            }
+
+            this.waitPlaybackStarted = true;
+            this.markActivity("waiting_playback_started");
+            this.log("human bridge waiting playback started", {
+                reason,
+                wait_message_configured: Boolean(this.waitMessage),
+                wait_tone_enabled: this.waitToneEnabled,
+                wait_position: this.waitPosition,
+            });
+
+            if (this.waitMessage) {
+                try {
+                    await this.playWaitMessage(reason);
+                } catch (error) {
+                    this.log("human bridge wait message playback failed", {
+                        reason,
+                        error: error.message,
+                    });
+                }
+            }
+
+            if (this.waitToneEnabled && !this.closedAt && !this.agentWs && !this.agentPc) {
+                this.startWaitToneLoop();
+            }
+
+            return true;
+        } finally {
+            this.waitPlaybackPreparing = false;
+        }
+    }
+
+    async playWaitMessage(reason) {
+        const ttsResult = await ttsService.synthesize(
+            {
+                text: this.waitMessage,
+                voice: "nova",
+                format: "mp3",
+                instructions: "Lee este mensaje de espera de forma calmada y natural. No agregues frases nuevas.",
+            },
+            {
+                baseUrl: this.baseUrl,
+            }
+        );
+
+        if (!ttsResult.audio_url) {
+            throw new Error("Waiting TTS did not return audio_url");
+        }
+
+        const playback = await this.metaAudioOutput.enqueueAudioUrl(ttsResult.audio_url, {
+            source: "human_bridge_wait_message",
+            reason,
+        });
+
+        this.markActivity("waiting_message_played");
+        this.log("human bridge waiting message playback complete", {
+            audio_url: ttsResult.audio_url,
+            frames_sent: playback.framesSent,
+            frames_queued: playback.framesQueued,
+            stopped: playback.stopped,
+        });
+    }
+
+    startWaitToneLoop() {
+        if (this.waitToneTimer || !this.metaAudioOutput) {
+            return;
+        }
+
+        const enqueueTone = () => {
+            if (this.closedAt || this.agentWs || this.agentPc || !this.metaAudioOutput) {
+                this.stopWaitingPlayback("agent_or_call_closed");
+                return;
+            }
+
+            this.metaAudioOutput.enqueuePcm(generateWaitTonePcm(), {
+                source: "human_bridge_wait_tone",
+            }).catch((error) => {
+                this.log("human bridge waiting tone failed", {
+                    error: error.message,
+                });
+            });
+
+            this.markActivity("waiting_tone_queued");
+        };
+
+        enqueueTone();
+        this.waitToneTimer = setInterval(enqueueTone, env.humanBridgeWaitToneIntervalMs);
+    }
+
+    stopWaitingPlayback(reason = "waiting_stopped") {
+        if (this.waitToneTimer) {
+            clearInterval(this.waitToneTimer);
+            this.waitToneTimer = null;
+        }
+
+        if (this.metaAudioOutput) {
+            this.metaAudioOutput.stop();
+        }
     }
 
     async connectAgent(agentOfferSdp, options = {}) {
@@ -195,6 +343,7 @@ class HumanBridgeCallSession {
         await waitForIceGatheringComplete(this.agentPc, env.webrtcIceGatherTimeoutMs);
 
         this.status = "agent_connected";
+        this.stopWaitingPlayback("agent_peer_connected");
         this.markActivity("agent_answer_ready");
         this.log("human bridge agent answer_sdp ready", {
             agent_id: this.activeAgentId,
@@ -223,6 +372,7 @@ class HumanBridgeCallSession {
             }
 
             this.agentFramesReceived += 1;
+            this.stopWaitingPlayback("agent_audio");
             this.markActivity("agent_audio");
 
             if (this.metaAudioSource) {
@@ -250,6 +400,7 @@ class HumanBridgeCallSession {
         this.agentWs = ws;
         this.activeAgentId = options.agentId || options.agent_id || this.activeAgentId;
         this.status = "agent_ws_connected";
+        this.stopWaitingPlayback("agent_ws_connected");
         this.markActivity("agent_ws_connected");
         this.log("human bridge agent websocket connected", {
             agent_id: this.activeAgentId,
@@ -276,6 +427,7 @@ class HumanBridgeCallSession {
 
             this.agentFramesReceived += 1;
             this.agentWsFramesReceived += 1;
+            this.stopWaitingPlayback("agent_ws_audio");
             this.markActivity("agent_ws_audio");
 
             if (this.agentWsFramesReceived === 1 || this.agentWsFramesReceived % 250 === 0) {
@@ -420,6 +572,7 @@ class HumanBridgeCallSession {
 
         this.closedAt = new Date();
         this.status = "closed";
+        this.stopWaitingPlayback(reason);
 
         await this.closeAgentPeer(reason);
 
@@ -431,6 +584,11 @@ class HumanBridgeCallSession {
         if (this.metaOutboundTrack) {
             this.metaOutboundTrack.stop();
             this.metaOutboundTrack = null;
+        }
+
+        if (this.metaAudioOutput) {
+            this.metaAudioOutput.stop();
+            this.metaAudioOutput = null;
         }
 
         if (this.metaPc) {
@@ -459,6 +617,15 @@ class HumanBridgeCallSession {
     handlePeerState(peer, state) {
         this.log("human bridge peer state", { peer, state });
 
+        if (peer === "meta" && ["connected", "completed"].includes(state)) {
+            this.startWaitingPlayback(`meta_peer_${state}`).catch((error) => {
+                this.log("human bridge waiting playback failed", {
+                    reason: `meta_peer_${state}`,
+                    error: error.message,
+                });
+            });
+        }
+
         if (["failed", "closed"].includes(state) && peer === "meta" && !this.closedAt) {
             this.close(`${peer}_peer_${state}`).catch((error) => {
                 console.error("Error closing human bridge after peer state", error);
@@ -469,11 +636,69 @@ class HumanBridgeCallSession {
     handleIceState(peer, state) {
         this.log("human bridge ice state", { peer, state });
 
+        if (peer === "meta" && ["connected", "completed"].includes(state)) {
+            this.startWaitingPlayback(`meta_ice_${state}`).catch((error) => {
+                this.log("human bridge waiting playback failed", {
+                    reason: `meta_ice_${state}`,
+                    error: error.message,
+                });
+            });
+        }
+
         if (["failed", "closed"].includes(state) && peer === "meta" && !this.closedAt) {
             this.close(`${peer}_ice_${state}`).catch((error) => {
                 console.error("Error closing human bridge after ice state", error);
             });
         }
+    }
+
+    waitForMetaPlaybackReady() {
+        if (this.isMetaPlaybackReady()) {
+            return Promise.resolve(true);
+        }
+
+        this.log("human bridge waiting for meta ICE before wait playback", {
+            connection_state: this.metaPc ? this.metaPc.connectionState : null,
+            ice_connection_state: this.metaPc ? this.metaPc.iceConnectionState : null,
+            timeout_ms: env.callPlaybackWaitForIceMs,
+        });
+
+        return new Promise((resolve) => {
+            const timeout = setTimeout(() => {
+                cleanup();
+                resolve(false);
+            }, env.callPlaybackWaitForIceMs);
+
+            const cleanup = () => {
+                clearTimeout(timeout);
+
+                if (this.metaPc) {
+                    this.metaPc.removeEventListener("connectionstatechange", onStateChange);
+                    this.metaPc.removeEventListener("iceconnectionstatechange", onStateChange);
+                }
+            };
+
+            const onStateChange = () => {
+                if (this.isMetaPlaybackReady()) {
+                    cleanup();
+                    resolve(true);
+                }
+            };
+
+            if (this.metaPc) {
+                this.metaPc.addEventListener("connectionstatechange", onStateChange);
+                this.metaPc.addEventListener("iceconnectionstatechange", onStateChange);
+            }
+        });
+    }
+
+    isMetaPlaybackReady() {
+        if (!this.metaPc) {
+            return false;
+        }
+
+        return ["connected", "completed"].includes(this.metaPc.iceConnectionState) ||
+            ["connected"].includes(this.metaPc.connectionState);
     }
 
     markActivity(type) {
@@ -497,6 +722,10 @@ class HumanBridgeCallSession {
             agent_frames_received: this.agentFramesReceived,
             meta_ws_frames_sent: this.metaWsFramesSent,
             agent_ws_frames_received: this.agentWsFramesReceived,
+            wait_message_configured: Boolean(this.waitMessage),
+            wait_tone_enabled: this.waitToneEnabled,
+            wait_position: this.waitPosition,
+            wait_playback_started: this.waitPlaybackStarted,
             has_meta_peer: Boolean(this.metaPc),
             has_agent_peer: Boolean(this.agentPc),
             has_agent_ws: Boolean(this.agentWs),
@@ -541,6 +770,31 @@ function summarizeSdp(sdp) {
         has_extmap_allow_mixed: lines.some((line) => line.trim() === "a=extmap-allow-mixed"),
         invalid_lines: invalidLines,
     };
+}
+
+function normalizeWaitMessage(value) {
+    if (typeof value !== "string") {
+        return "";
+    }
+
+    return value.replace(/\s+/g, " ").trim();
+}
+
+function generateWaitTonePcm() {
+    const durationSeconds = 1.4;
+    const totalSamples = Math.round(TONE_SAMPLE_RATE * durationSeconds);
+    const samples = new Int16Array(totalSamples);
+    const amplitude = 0.16 * 0x7fff;
+    const fadeSamples = Math.round(TONE_SAMPLE_RATE * 0.08);
+
+    for (let index = 0; index < totalSamples; index++) {
+        const t = index / TONE_SAMPLE_RATE;
+        const envelope = Math.min(1, index / fadeSamples, (totalSamples - index) / fadeSamples);
+        const tone = Math.sin(2 * Math.PI * 440 * t) * 0.62 + Math.sin(2 * Math.PI * 554.37 * t) * 0.38;
+        samples[index] = Math.round(tone * amplitude * Math.max(0, envelope));
+    }
+
+    return Buffer.from(samples.buffer);
 }
 
 function findAudioTransceiver(pc) {

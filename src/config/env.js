@@ -78,6 +78,7 @@ const env = {
     callLogSdp: toBoolean(process.env.CALL_LOG_SDP, true),
     callPlaybackWaitForIceMs: toNumber(process.env.CALL_PLAYBACK_WAIT_FOR_ICE_MS, 5000),
     callInitialPlaybackPrerollMs: toNumber(process.env.CALL_INITIAL_PLAYBACK_PREROLL_MS, 700),
+    humanBridgeWaitToneIntervalMs: toNumber(process.env.HUMAN_BRIDGE_WAIT_TONE_INTERVAL_MS, 4500),
     realtimeConnectTimeoutMs: toNumber(process.env.REALTIME_CONNECT_TIMEOUT_MS, 10000),
     realtimeToolTimeoutMs: toNumber(process.env.REALTIME_TOOL_TIMEOUT_MS, 12000),
     realtimeVadThreshold: toNumber(process.env.OPENAI_REALTIME_VAD_THRESHOLD, 0.65),

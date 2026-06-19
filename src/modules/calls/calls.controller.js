@@ -108,6 +108,14 @@ async function applySessionAnswer(req, res, next) {
 
 async function connectAgent(req, res, next) {
     try {
+        console.warn(
+            "[calls] legacy human bridge /agent endpoint was used; current EVA should connect through /agent-ws",
+            JSON.stringify({
+                session_id: req.params.session_id,
+                agent_id: req.body.agent_id || req.body.agentId || null,
+            })
+        );
+
         const { answer_sdp: answerSdp, snapshot } = await callSessionManager.connectAgent(
             req.params.session_id,
             req.body.offer_sdp || req.body.sdp || "",

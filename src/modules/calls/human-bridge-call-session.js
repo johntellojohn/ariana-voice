@@ -29,6 +29,8 @@ class HumanBridgeCallSession {
         this.agentWs = null;
         this.metaFramesReceived = 0;
         this.agentFramesReceived = 0;
+        this.metaWsFramesSent = 0;
+        this.agentWsFramesReceived = 0;
         this.activeAgentId = null;
         this.lastActivityAt = Date.now();
         this.lastActivityType = "created";
@@ -271,7 +273,17 @@ class HumanBridgeCallSession {
             }
 
             this.agentFramesReceived += 1;
+            this.agentWsFramesReceived += 1;
             this.markActivity("agent_ws_audio");
+
+            if (this.agentWsFramesReceived === 1 || this.agentWsFramesReceived % 250 === 0) {
+                this.log("human bridge agent websocket audio received", {
+                    agent_id: this.activeAgentId,
+                    frames: this.agentWsFramesReceived,
+                    samples: samples.length,
+                });
+            }
+
             this.metaAudioSource.onData({
                 samples,
                 sampleRate: 48000,
@@ -316,6 +328,15 @@ class HumanBridgeCallSession {
         try {
             const buffer = Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength);
             this.agentWs.send(buffer, { binary: true });
+            this.metaWsFramesSent += 1;
+
+            if (this.metaWsFramesSent === 1 || this.metaWsFramesSent % 250 === 0) {
+                this.log("human bridge meta audio sent to agent websocket", {
+                    agent_id: this.activeAgentId,
+                    frames: this.metaWsFramesSent,
+                    bytes: buffer.length,
+                });
+            }
         } catch (error) {
             this.log("human bridge agent websocket send failed", {
                 error: error.message,
@@ -386,6 +407,8 @@ class HumanBridgeCallSession {
             reason,
             meta_frames_received: this.metaFramesReceived,
             agent_frames_received: this.agentFramesReceived,
+            meta_ws_frames_sent: this.metaWsFramesSent,
+            agent_ws_frames_received: this.agentWsFramesReceived,
         });
 
         if (typeof this.onClosed === "function") {
@@ -432,6 +455,8 @@ class HumanBridgeCallSession {
             last_activity_type: this.lastActivityType,
             meta_frames_received: this.metaFramesReceived,
             agent_frames_received: this.agentFramesReceived,
+            meta_ws_frames_sent: this.metaWsFramesSent,
+            agent_ws_frames_received: this.agentWsFramesReceived,
             has_meta_peer: Boolean(this.metaPc),
             has_agent_peer: Boolean(this.agentPc),
             has_agent_ws: Boolean(this.agentWs),

@@ -3,6 +3,7 @@ const wrtc = require("@roamhq/wrtc");
 const env = require("../../config/env");
 
 const { RTCAudioSink, RTCAudioSource } = wrtc.nonstandard;
+const RTC_AUDIO_FRAME_SAMPLES = 480;
 
 class HumanBridgeCallSession {
     constructor(payload, options = {}) {
@@ -31,6 +32,7 @@ class HumanBridgeCallSession {
         this.agentFramesReceived = 0;
         this.metaWsFramesSent = 0;
         this.agentWsFramesReceived = 0;
+        this.agentWsSampleRemainder = null;
         this.activeAgentId = null;
         this.lastActivityAt = Date.now();
         this.lastActivityType = "created";
@@ -284,13 +286,7 @@ class HumanBridgeCallSession {
                 });
             }
 
-            this.metaAudioSource.onData({
-                samples,
-                sampleRate: 48000,
-                bitsPerSample: 16,
-                channelCount: 1,
-                numberOfFrames: samples.length,
-            });
+            this.sendAgentSamplesToMeta(samples);
         });
 
         ws.on("close", (code, reason) => {
@@ -344,6 +340,49 @@ class HumanBridgeCallSession {
         }
     }
 
+    sendAgentSamplesToMeta(samples) {
+        if (!this.metaAudioSource || !samples || samples.length === 0) {
+            return;
+        }
+
+        if (this.agentWsSampleRemainder && this.agentWsSampleRemainder.length > 0) {
+            const combined = new Int16Array(this.agentWsSampleRemainder.length + samples.length);
+            combined.set(this.agentWsSampleRemainder, 0);
+            combined.set(samples, this.agentWsSampleRemainder.length);
+            samples = combined;
+            this.agentWsSampleRemainder = null;
+        }
+
+        const completeFramesLength = samples.length - (samples.length % RTC_AUDIO_FRAME_SAMPLES);
+
+        if (completeFramesLength === 0) {
+            this.agentWsSampleRemainder = new Int16Array(samples);
+            return;
+        }
+
+        for (let offset = 0; offset < completeFramesLength; offset += RTC_AUDIO_FRAME_SAMPLES) {
+            this.metaAudioSource.onData({
+                samples: samples.subarray(offset, offset + RTC_AUDIO_FRAME_SAMPLES),
+                sampleRate: 48000,
+                bitsPerSample: 16,
+                channelCount: 1,
+                numberOfFrames: RTC_AUDIO_FRAME_SAMPLES,
+            });
+        }
+
+        if (completeFramesLength !== samples.length) {
+            this.agentWsSampleRemainder = new Int16Array(samples.subarray(completeFramesLength));
+        }
+
+        if (this.agentWsSampleRemainder && (this.agentWsFramesReceived === 1 || this.agentWsFramesReceived % 250 === 0)) {
+            this.log("human bridge agent websocket audio trailing samples buffered", {
+                agent_id: this.activeAgentId,
+                received_samples: samples.length,
+                buffered_samples: this.agentWsSampleRemainder.length,
+            });
+        }
+    }
+
     async closeAgentPeer(reason = "agent_closed") {
         if (this.agentSink) {
             this.agentSink.stop();
@@ -368,6 +407,7 @@ class HumanBridgeCallSession {
         }
 
         this.agentWs = null;
+        this.agentWsSampleRemainder = null;
         this.agentAudioSource = null;
         this.activeAgentId = null;
         this.markActivity(reason);

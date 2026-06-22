@@ -1,5 +1,6 @@
 const AsteriskManager = require("asterisk-manager");
 const env = require("../../config/env");
+const laravelService = require("../laravel/laravel.service");
 
 const trackedEvents = new Set(["dialbegin", "dialend", "bridgeenter", "hangup"]);
 
@@ -117,6 +118,7 @@ function handleManagerEvent(event) {
     }
 
     updateCallSummary(normalized);
+    notifyLaravel(normalized);
 }
 
 function normalizeEventName(event) {
@@ -291,6 +293,29 @@ function getCallByLinkedId(linkedid) {
         channels: [...call.channels],
         events: [...call.events],
     };
+}
+
+function notifyLaravel(event) {
+    if (!env.pbxLaravelEventsEnabled) {
+        return;
+    }
+
+    const summary = event.linkedid ? getCallByLinkedId(event.linkedid) : null;
+
+    laravelService
+        .sendTrunkCallEvent({
+            event,
+            summary,
+            source: "ariana-voice-pbx",
+        })
+        .catch((error) => {
+            console.error("[pbx] Laravel trunk event callback failed", {
+                linkedid: event.linkedid || null,
+                event: event.event || null,
+                message: error.message,
+                status: error.response?.status,
+            });
+        });
 }
 
 async function originateExtension(fromExtension, toExtension) {

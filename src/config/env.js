@@ -111,6 +111,9 @@ const env = {
     pbxOriginateTimeoutMs: toNumber(process.env.PBX_ORIGINATE_TIMEOUT_MS, 30000),
     pbxCallerIdPrefix: process.env.PBX_CALLER_ID_PREFIX || "Ariana",
     pbxDirectTrunkEndpoint: process.env.PBX_DIRECT_TRUNK_ENDPOINT || "fxo",
+    pbxLaravelEventsEnabled: toBoolean(process.env.PBX_LARAVEL_EVENTS_ENABLED, false),
+    pbxLaravelEventsPath:
+        process.env.PBX_LARAVEL_EVENTS_PATH || "/api/trunk-calls/events",
 
     logLevel: process.env.LOG_LEVEL || "info",
 };

@@ -295,6 +295,42 @@ function getCallByLinkedId(linkedid) {
     };
 }
 
+async function hangupCall(linkedid, reason = "laravel_hangup") {
+    validateRequired({ linkedid });
+    ensureReady();
+
+    const call = callsByLinkedId.get(linkedid);
+
+    if (!call) {
+        const error = new Error("PBX call not found");
+        error.status = 404;
+        throw error;
+    }
+
+    const channels = [...call.channels].filter(Boolean);
+
+    if (channels.length === 0) {
+        const error = new Error("PBX call has no tracked channels to hang up");
+        error.status = 409;
+        throw error;
+    }
+
+    const results = [];
+
+    for (const channel of channels) {
+        results.push({
+            channel,
+            response: await hangupChannel(channel, reason),
+        });
+    }
+
+    return {
+        linkedid,
+        reason,
+        channels: results,
+    };
+}
+
 function notifyLaravel(event) {
     if (!env.pbxLaravelEventsEnabled) {
         return;
@@ -393,6 +429,26 @@ function originate(action) {
     });
 }
 
+function hangupChannel(channel, reason) {
+    return new Promise((resolve, reject) => {
+        ami.action(
+            {
+                Action: "Hangup",
+                Channel: channel,
+                Cause: env.pbxHangupCause,
+                Reason: reason,
+            },
+            (error, response) => {
+                if (error) {
+                    return reject(error);
+                }
+
+                return resolve(response);
+            }
+        );
+    });
+}
+
 function ensureReady() {
     if (!env.pbxAmiEnabled) {
         const error = new Error("PBX AMI is disabled");
@@ -418,6 +474,7 @@ module.exports = {
     getCallEvents,
     getCallsSummary,
     getCallByLinkedId,
+    hangupCall,
     originateExtension,
     originateExternal,
     originateDirect,

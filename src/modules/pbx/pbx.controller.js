@@ -43,6 +43,22 @@ function showCall(req, res) {
     });
 }
 
+async function hangupCall(req, res, next) {
+    try {
+        const response = await pbxService.hangupCall(
+            req.params.linkedid,
+            req.body.reason
+        );
+
+        res.json({
+            ok: true,
+            data: response,
+        });
+    } catch (error) {
+        next(error);
+    }
+}
+
 async function originateExtension(req, res, next) {
     try {
         const response = await pbxService.originateExtension(
@@ -96,6 +112,7 @@ module.exports = {
     callEvents,
     callsSummary,
     showCall,
+    hangupCall,
     originateExtension,
     originateExternal,
     originateDirect,

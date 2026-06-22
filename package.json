@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "@roamhq/wrtc": "^0.10.0",
+    "asterisk-manager": "^0.2.0",
     "axios": "^1.16.1",
     "compression": "^1.8.1",
     "cors": "^2.8.6",

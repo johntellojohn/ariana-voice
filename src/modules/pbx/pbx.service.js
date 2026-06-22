@@ -331,6 +331,48 @@ async function hangupCall(linkedid, reason = "laravel_hangup") {
     };
 }
 
+async function connectCallToExtension(linkedid, extension, context = env.pbxOriginateContext) {
+    validateRequired({ linkedid, extension });
+    ensureReady();
+    const targetContext = context || env.pbxOriginateContext;
+
+    const call = callsByLinkedId.get(linkedid);
+
+    if (!call) {
+        const error = new Error("PBX call not found");
+        error.status = 404;
+        throw error;
+    }
+
+    const channel = primaryCallChannel(call);
+
+    if (!channel) {
+        const error = new Error("PBX call has no tracked channel to redirect");
+        error.status = 409;
+        throw error;
+    }
+
+    return redirectChannel(channel, {
+        context: targetContext,
+        extension,
+        priority: env.pbxOriginatePriority,
+    }).then((response) => ({
+        linkedid,
+        channel,
+        context: targetContext,
+        extension,
+        response,
+    }));
+}
+
+function primaryCallChannel(call) {
+    const dialBegin = [...call.events]
+        .reverse()
+        .find((event) => event.event === "dialbegin" && event.channel);
+
+    return dialBegin?.channel || call.channels[0] || "";
+}
+
 function notifyLaravel(event) {
     if (!env.pbxLaravelEventsEnabled) {
         return;
@@ -449,6 +491,27 @@ function hangupChannel(channel, reason) {
     });
 }
 
+function redirectChannel(channel, target) {
+    return new Promise((resolve, reject) => {
+        ami.action(
+            {
+                Action: "Redirect",
+                Channel: channel,
+                Context: target.context,
+                Exten: target.extension,
+                Priority: target.priority,
+            },
+            (error, response) => {
+                if (error) {
+                    return reject(error);
+                }
+
+                return resolve(response);
+            }
+        );
+    });
+}
+
 function ensureReady() {
     if (!env.pbxAmiEnabled) {
         const error = new Error("PBX AMI is disabled");
@@ -475,6 +538,7 @@ module.exports = {
     getCallsSummary,
     getCallByLinkedId,
     hangupCall,
+    connectCallToExtension,
     originateExtension,
     originateExternal,
     originateDirect,

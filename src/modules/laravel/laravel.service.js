@@ -18,27 +18,6 @@ async function sendVoiceTurn(payload) {
     return response.data;
 }
 
-async function sendTrunkCallEvent(payload) {
-    const path = env.pbxLaravelEventsPath.startsWith("/")
-        ? env.pbxLaravelEventsPath
-        : `/${env.pbxLaravelEventsPath}`;
-    const url = `${env.laravelApiUrl.replace(/\/$/, "")}${path}`;
-
-    const response = await axios.post(url, payload, {
-        headers: {
-            Accept: "application/json",
-            "Content-Type": "application/json",
-            Authorization: env.laravelApiToken
-                ? `Bearer ${env.laravelApiToken}`
-                : undefined,
-        },
-        timeout: env.callCallbackTimeoutMs,
-    });
-
-    return response.data;
-}
-
 module.exports = {
     sendVoiceTurn,
-    sendTrunkCallEvent,
 };

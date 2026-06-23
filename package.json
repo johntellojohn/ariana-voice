@@ -7,8 +7,6 @@
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
     "check": "node scripts/check-js.js",
-    "check:pbx": "node scripts/check-pbx-ami.js",
-    "test:trunk-callback": "node scripts/test-trunk-callback.js",
     "test:realtime-initial-greeting": "node scripts/test-realtime-initial-greeting.js",
     "test:realtime-interruptions": "node scripts/test-realtime-interruptions.js",
     "test:realtime-tool-intents": "node scripts/test-realtime-tool-intents.js",
@@ -24,7 +22,6 @@
   },
   "dependencies": {
     "@roamhq/wrtc": "^0.10.0",
-    "asterisk-manager": "^0.2.0",
     "axios": "^1.16.1",
     "compression": "^1.8.1",
     "cors": "^2.8.6",

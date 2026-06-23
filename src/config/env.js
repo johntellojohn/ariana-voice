@@ -99,23 +99,6 @@ const env = {
         700
     ),
 
-    pbxAmiEnabled: toBoolean(process.env.PBX_AMI_ENABLED, false),
-    pbxAmiHost: process.env.PBX_AMI_HOST || "127.0.0.1",
-    pbxAmiPort: toNumber(process.env.PBX_AMI_PORT, 5038),
-    pbxAmiUsername: process.env.PBX_AMI_USERNAME || "",
-    pbxAmiPassword: process.env.PBX_AMI_PASSWORD || "",
-    pbxAmiReconnect: toBoolean(process.env.PBX_AMI_RECONNECT, true),
-    pbxMaxEvents: toNumber(process.env.PBX_MAX_EVENTS, 300),
-    pbxOriginateContext: process.env.PBX_ORIGINATE_CONTEXT || "from-internal",
-    pbxOriginatePriority: toNumber(process.env.PBX_ORIGINATE_PRIORITY, 1),
-    pbxOriginateTimeoutMs: toNumber(process.env.PBX_ORIGINATE_TIMEOUT_MS, 30000),
-    pbxCallerIdPrefix: process.env.PBX_CALLER_ID_PREFIX || "Ariana",
-    pbxDirectTrunkEndpoint: process.env.PBX_DIRECT_TRUNK_ENDPOINT || "fxo",
-    pbxHangupCause: toNumber(process.env.PBX_HANGUP_CAUSE, 16),
-    pbxLaravelEventsEnabled: toBoolean(process.env.PBX_LARAVEL_EVENTS_ENABLED, false),
-    pbxLaravelEventsPath:
-        process.env.PBX_LARAVEL_EVENTS_PATH || "/api/trunk-calls/events",
-
     logLevel: process.env.LOG_LEVEL || "info",
 };
 

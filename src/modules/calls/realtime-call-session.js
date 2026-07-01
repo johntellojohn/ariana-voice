@@ -12,6 +12,7 @@ const { int16ArrayToBuffer } = require("./wav.util");
 const { RTCAudioSink, RTCAudioSource } = wrtc.nonstandard;
 const REALTIME_SAMPLE_RATE = 24000;
 const META_SAMPLE_RATE = 48000;
+const RTC_AUDIO_FRAME_SAMPLES = 480;
 
 class RealtimeCallSession {
     constructor(payload, options = {}) {
@@ -45,6 +46,14 @@ class RealtimeCallSession {
         this.remoteAudioFramesReceived = 0;
         this.realtimeSocket = null;
         this.realtimeReady = false;
+        this.realtimeClosedForHumanTransfer = false;
+        this.humanTransferActive = false;
+        this.pendingHumanTransferRealtimeClose = false;
+        this.agentWs = null;
+        this.activeAgentId = null;
+        this.metaWsFramesSent = 0;
+        this.agentWsFramesReceived = 0;
+        this.agentWsSampleRemainder = null;
         this.audioInputReady = false;
         this.outputActive = false;
         this.currentResponseId = null;
@@ -174,7 +183,7 @@ class RealtimeCallSession {
                 reason,
             });
 
-            if (!this.closedAt && this.status !== "starting") {
+            if (!this.closedAt && this.status !== "starting" && !this.realtimeClosedForHumanTransfer) {
                 this.close(`realtime_socket_closed_${code}`).catch((error) => {
                     console.error("Error closing realtime socket session", error);
                 });
@@ -332,6 +341,19 @@ class RealtimeCallSession {
                 },
                 additionalProperties: false,
             }),
+            functionTool("transfer_to_human", "Transfiere esta llamada a un agente humano disponible cuando el cliente pida hablar con una persona, soporte, asesor o recepcion, o cuando la IA no entienda o detecte molestia.", {
+                type: "object",
+                properties: {
+                    trigger: {
+                        type: "string",
+                        enum: ["customer_request", "ai_confusion", "customer_frustrated", "unresolved"],
+                    },
+                    reason: { type: "string" },
+                    preferred_agent_id: { type: "integer" },
+                },
+                required: ["trigger"],
+                additionalProperties: false,
+            }),
         ];
     }
 
@@ -396,11 +418,20 @@ class RealtimeCallSession {
     }
 
     handleAudioData(data) {
-        if (this.closedAt || !this.realtimeReady) {
+        if (this.closedAt) {
             return;
         }
 
         this.remoteAudioFramesReceived += 1;
+
+        if (this.humanTransferActive) {
+            this.sendMetaAudioToAgentWebSocket(data);
+            return;
+        }
+
+        if (!this.realtimeReady) {
+            return;
+        }
 
         if (this.notificationOnly) {
             this.playInitialGreeting("remote_audio_received").catch((error) => {
@@ -501,6 +532,9 @@ class RealtimeCallSession {
                 this.outputActive = false;
                 this.lastPlaybackAt = Date.now();
                 this.markActivity("realtime_response_done");
+                if (this.pendingHumanTransferRealtimeClose) {
+                    this.closeRealtimeForHumanTransfer("human_transfer_message_done");
+                }
                 break;
             case "response.function_call_arguments.done":
                 this.handleFunctionCall(event).catch((error) => {
@@ -590,6 +624,7 @@ class RealtimeCallSession {
             tool_call_id: event.call_id,
             ok: result.ok,
             success: result.data && result.data.success,
+            transferred: result.data && result.data.transferred,
             status: result.status || null,
             message: result.message || (result.data && result.data.message) || null,
             options_count: Array.isArray(result.data && result.data.options)
@@ -611,6 +646,19 @@ class RealtimeCallSession {
             return;
         }
 
+        const transferMessage = result.data && result.data.transferred
+            ? String(result.data.message || "")
+            : "";
+
+        if (transferMessage) {
+            this.humanTransferActive = true;
+            this.markActivity("human_transfer_requested");
+            this.log("realtime human transfer activated", {
+                tool_call_id: event.call_id,
+                agent_id: result.data.agent && result.data.agent.id,
+            });
+        }
+
         this.sendRealtimeEvent({
             type: "conversation.item.create",
             item: {
@@ -623,8 +671,183 @@ class RealtimeCallSession {
             type: "response.create",
             response: {
                 output_modalities: ["audio"],
+                ...(transferMessage
+                    ? {
+                        instructions: `Di exactamente este mensaje y no agregues nada mas: "${transferMessage}"`,
+                    }
+                    : {}),
             },
         });
+
+        if (transferMessage) {
+            this.pendingHumanTransferRealtimeClose = true;
+            setTimeout(() => {
+                if (this.pendingHumanTransferRealtimeClose && !this.realtimeClosedForHumanTransfer) {
+                    this.closeRealtimeForHumanTransfer("human_transfer_ready_timeout");
+                }
+            }, 8000);
+        }
+    }
+
+    attachAgentWebSocket(ws, options = {}) {
+        if (this.closedAt) {
+            ws.close(1011, "session_closed");
+            return;
+        }
+
+        if (!this.humanTransferActive) {
+            ws.close(1011, "human_transfer_not_active");
+            return;
+        }
+
+        if (this.agentWs && this.agentWs.readyState === 1) {
+            this.agentWs.close(1000, "agent_replaced");
+        }
+
+        this.agentWs = ws;
+        this.activeAgentId = options.agentId || options.agent_id || this.activeAgentId;
+        this.status = "agent_ws_connected";
+        this.markActivity("agent_ws_connected");
+
+        if (this.audioOutput) {
+            this.audioOutput.stop();
+        }
+
+        this.log("realtime human transfer agent websocket connected", {
+            agent_id: this.activeAgentId,
+        });
+
+        ws.on("message", (message, isBinary) => {
+            if (!isBinary || this.closedAt || !this.audioSource) {
+                return;
+            }
+
+            const buffer = Buffer.isBuffer(message) ? message : Buffer.from(message);
+
+            if (buffer.length < 2) {
+                return;
+            }
+
+            const samples = new Int16Array(
+                buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
+            );
+
+            if (samples.length === 0) {
+                return;
+            }
+
+            this.agentWsFramesReceived += 1;
+            this.markActivity("agent_ws_audio");
+
+            if (this.agentWsFramesReceived === 1 || this.agentWsFramesReceived % 250 === 0) {
+                this.log("realtime human transfer agent websocket audio received", {
+                    agent_id: this.activeAgentId,
+                    frames: this.agentWsFramesReceived,
+                    samples: samples.length,
+                });
+            }
+
+            this.sendAgentSamplesToMeta(samples);
+        });
+
+        ws.on("close", (code, reason) => {
+            if (this.agentWs === ws) {
+                this.agentWs = null;
+            }
+
+            this.markActivity("agent_ws_closed");
+            this.log("realtime human transfer agent websocket closed", {
+                agent_id: this.activeAgentId,
+                code,
+                reason: reason ? reason.toString() : "",
+            });
+        });
+
+        ws.on("error", (error) => {
+            this.log("realtime human transfer agent websocket error", {
+                agent_id: this.activeAgentId,
+                error: error.message,
+            });
+        });
+    }
+
+    sendMetaAudioToAgentWebSocket(data) {
+        if (!this.agentWs || this.agentWs.readyState !== 1) {
+            return;
+        }
+
+        const samples = data && data.samples;
+
+        if (!samples || samples.byteLength === 0) {
+            return;
+        }
+
+        try {
+            const buffer = Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength);
+            this.agentWs.send(buffer, { binary: true });
+            this.metaWsFramesSent += 1;
+
+            if (this.metaWsFramesSent === 1 || this.metaWsFramesSent % 250 === 0) {
+                this.log("realtime human transfer meta audio sent to agent websocket", {
+                    agent_id: this.activeAgentId,
+                    frames: this.metaWsFramesSent,
+                    bytes: buffer.length,
+                });
+            }
+        } catch (error) {
+            this.log("realtime human transfer agent websocket send failed", {
+                error: error.message,
+            });
+        }
+    }
+
+    sendAgentSamplesToMeta(samples) {
+        if (!this.audioSource || !samples || samples.length === 0) {
+            return;
+        }
+
+        if (this.agentWsSampleRemainder && this.agentWsSampleRemainder.length > 0) {
+            const combined = new Int16Array(this.agentWsSampleRemainder.length + samples.length);
+            combined.set(this.agentWsSampleRemainder, 0);
+            combined.set(samples, this.agentWsSampleRemainder.length);
+            samples = combined;
+            this.agentWsSampleRemainder = null;
+        }
+
+        const completeFramesLength = samples.length - (samples.length % RTC_AUDIO_FRAME_SAMPLES);
+
+        if (completeFramesLength === 0) {
+            this.agentWsSampleRemainder = new Int16Array(samples);
+            return;
+        }
+
+        for (let offset = 0; offset < completeFramesLength; offset += RTC_AUDIO_FRAME_SAMPLES) {
+            this.audioSource.onData({
+                samples: new Int16Array(samples.subarray(offset, offset + RTC_AUDIO_FRAME_SAMPLES)),
+                sampleRate: META_SAMPLE_RATE,
+                bitsPerSample: 16,
+                channelCount: 1,
+                numberOfFrames: RTC_AUDIO_FRAME_SAMPLES,
+            });
+        }
+
+        if (completeFramesLength !== samples.length) {
+            this.agentWsSampleRemainder = new Int16Array(samples.subarray(completeFramesLength));
+        }
+    }
+
+    closeRealtimeForHumanTransfer(reason = "human_transfer_ready") {
+        this.realtimeClosedForHumanTransfer = true;
+        this.pendingHumanTransferRealtimeClose = false;
+        this.realtimeReady = false;
+        this.outputActive = false;
+        this.currentResponseId = null;
+        this.currentAssistantItemId = null;
+        this.interruptionGate.cancelPending();
+
+        if (this.realtimeSocket && this.realtimeSocket.readyState !== WebSocket.CLOSED) {
+            this.realtimeSocket.close(1000, reason);
+        }
     }
 
     handleInterruption(reason = "interrupted") {
@@ -1070,7 +1293,19 @@ class RealtimeCallSession {
     }
 
     instructions() {
-        return this.realtime.instructions || "Eres un agente de voz de EVA. Responde en espanol con frases breves y naturales.";
+        const base = this.realtime.instructions || "Eres un agente de voz de EVA. Responde en espanol con frases breves y naturales.";
+
+        if (this.notificationOnly) {
+            return base;
+        }
+
+        return `${base}
+
+Transferencia a humano:
+- Si el cliente pide hablar con una persona, asesor, soporte, recepcion o agente humano, usa la herramienta transfer_to_human con trigger "customer_request".
+- Si no estas entendiendo la solicitud o el cliente repite que no le entendiste, usa transfer_to_human con trigger "ai_confusion".
+- Si detectas molestia, frustracion o enojo, usa transfer_to_human con trigger "customer_frustrated".
+- Nunca digas que no puedes transferir. Usa la herramienta y luego di exactamente el mensaje devuelto por la herramienta.`;
     }
 
     markActivity(type) {

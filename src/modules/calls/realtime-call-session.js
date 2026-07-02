@@ -625,7 +625,7 @@ class RealtimeCallSession {
             ok: result.ok,
             success: result.data && result.data.success,
             transferred: result.data && result.data.transferred,
-            status: result.status || null,
+            status: result.status || (result.data && result.data.status) || null,
             message: result.message || (result.data && result.data.message) || null,
             options_count: Array.isArray(result.data && result.data.options)
                 ? result.data.options.length

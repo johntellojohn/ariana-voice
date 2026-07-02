@@ -9,6 +9,11 @@ const { createWavBuffer, int16ArrayToBuffer } = require("./wav.util");
 
 const SAMPLE_RATE = 48000;
 const BYTES_PER_SAMPLE = 2;
+const TRANSCRIPTION_FRAME_MS = 30;
+const TRANSCRIPTION_MIN_SPEECH_MS = 240;
+const TRANSCRIPTION_END_SILENCE_MS = 480;
+const TRANSCRIPTION_PADDING_MS = 180;
+const TRANSCRIPTION_MAX_SEGMENT_MS = 15000;
 const CHANNELS = {
     customer: {
         label: "Cliente",
@@ -269,10 +274,10 @@ class CallRecording {
         }
 
         if (segments.length > 0) {
-            return segments;
+            return sortTranscriptSegments(segments);
         }
 
-        return this.transcriptSegments;
+        return sortTranscriptSegments(this.transcriptSegments);
     }
 
     async transcribeSource(source, pcmBuffer) {
@@ -283,54 +288,75 @@ class CallRecording {
         }
 
         const channel = CHANNELS[source];
-        const filename = `recording-${this.safeSessionId}-${source}.wav`;
-        const filePath = path.join(this.rawDir, filename);
-        const wav = createWavBuffer(pcmBuffer, {
-            sampleRate: SAMPLE_RATE,
-            channelCount: 1,
-        });
+        const speechSegments = detectSpeechSegments(pcmBuffer);
+        const segments = speechSegments.length > 0
+            ? speechSegments
+            : [{
+                startSample: 0,
+                endSample: Math.floor(pcmBuffer.length / BYTES_PER_SAMPLE),
+                startMs: 0,
+                endMs: Math.round((state.samplesWritten / SAMPLE_RATE) * 1000),
+            }];
+        const transcriptSegments = [];
 
-        await fsp.writeFile(filePath, wav);
+        for (let index = 0; index < segments.length; index += 1) {
+            const segment = segments[index];
+            const startByte = segment.startSample * BYTES_PER_SAMPLE;
+            const endByte = segment.endSample * BYTES_PER_SAMPLE;
+            const segmentPcm = pcmBuffer.subarray(startByte, endByte);
 
-        try {
-            const result = await sttService.transcribe({
-                file: {
-                    path: filePath,
-                    originalname: filename,
-                    mimetype: "audio/wav",
-                    size: wav.length,
-                },
-                body: {
-                    language: env.callAudioLanguage || "es",
-                    prompt: `Transcribe solamente la voz de ${channel.label} en esta llamada. No inventes texto si hay silencio.`,
-                },
-                cleanup: false,
-            });
-            const text = String(result.text || "").trim();
-
-            if (!text) {
-                return [];
+            if (!segmentPcm.length) {
+                continue;
             }
 
-            return [{
-                speaker: channel.label,
-                side: channel.side,
-                text,
-                start_ms: 0,
-                end_ms: Math.round((state.samplesWritten / SAMPLE_RATE) * 1000),
-                provider: result.provider || null,
-                model: result.model || null,
-            }];
-        } catch (error) {
-            this.log("call recording source transcription failed", {
-                source,
-                error: error.message,
+            const filename = `recording-${this.safeSessionId}-${source}-${index + 1}.wav`;
+            const filePath = path.join(this.rawDir, filename);
+            const wav = createWavBuffer(segmentPcm, {
+                sampleRate: SAMPLE_RATE,
+                channelCount: 1,
             });
 
-            return [];
-        } finally {
-            await fsp.unlink(filePath).catch(() => {});
+            await fsp.writeFile(filePath, wav);
+
+            try {
+                const result = await sttService.transcribe({
+                    file: {
+                        path: filePath,
+                        originalname: filename,
+                        mimetype: "audio/wav",
+                        size: wav.length,
+                    },
+                    body: {
+                        language: env.callAudioLanguage || "es",
+                        prompt: `Transcribe solamente este fragmento de voz de ${channel.label}. No inventes texto si hay silencio.`,
+                    },
+                    cleanup: false,
+                });
+                const text = String(result.text || "").trim();
+
+                if (text) {
+                    transcriptSegments.push({
+                        speaker: channel.label,
+                        side: channel.side,
+                        text,
+                        start_ms: segment.startMs,
+                        end_ms: segment.endMs,
+                        provider: result.provider || null,
+                        model: result.model || null,
+                    });
+                }
+            } catch (error) {
+                this.log("call recording source segment transcription failed", {
+                    source,
+                    segment: index + 1,
+                    error: error.message,
+                });
+            } finally {
+                await fsp.unlink(filePath).catch(() => {});
+            }
         }
+
+        return transcriptSegments;
     }
 
     async sendRecordingCallback(result) {
@@ -469,6 +495,166 @@ function mixMono(customerPcm, agentPcm) {
     }
 
     return output;
+}
+
+function detectSpeechSegments(pcmBuffer) {
+    const totalSamples = Math.floor(pcmBuffer.length / BYTES_PER_SAMPLE);
+    const frameSamples = Math.max(1, Math.round((SAMPLE_RATE * TRANSCRIPTION_FRAME_MS) / 1000));
+    const totalFrames = Math.ceil(totalSamples / frameSamples);
+
+    if (totalFrames <= 0) {
+        return [];
+    }
+
+    const levels = [];
+
+    for (let frame = 0; frame < totalFrames; frame += 1) {
+        const startSample = frame * frameSamples;
+        const endSample = Math.min(totalSamples, startSample + frameSamples);
+
+        levels.push(frameRms(pcmBuffer, startSample, endSample));
+    }
+
+    const audibleLevels = levels.filter((level) => level > 80);
+    const threshold = audibleLevels.length > 0
+        ? clampNumber(percentile(audibleLevels, 0.7) * 0.25, 280, 1400)
+        : 280;
+    const minSpeechFrames = Math.max(1, Math.ceil(TRANSCRIPTION_MIN_SPEECH_MS / TRANSCRIPTION_FRAME_MS));
+    const silenceFrames = Math.max(1, Math.ceil(TRANSCRIPTION_END_SILENCE_MS / TRANSCRIPTION_FRAME_MS));
+    const paddingFrames = Math.max(0, Math.ceil(TRANSCRIPTION_PADDING_MS / TRANSCRIPTION_FRAME_MS));
+    const maxSegmentFrames = Math.max(1, Math.ceil(TRANSCRIPTION_MAX_SEGMENT_MS / TRANSCRIPTION_FRAME_MS));
+    const segments = [];
+    let activeStart = null;
+    let lastSpeechFrame = null;
+    let silentRun = 0;
+
+    for (let frame = 0; frame < totalFrames; frame += 1) {
+        const isSpeech = levels[frame] >= threshold;
+
+        if (isSpeech) {
+            if (activeStart === null) {
+                activeStart = Math.max(0, frame - paddingFrames);
+            }
+
+            lastSpeechFrame = frame;
+            silentRun = 0;
+        } else if (activeStart !== null) {
+            silentRun += 1;
+        }
+
+        const reachedSilence = activeStart !== null && silentRun >= silenceFrames;
+        const reachedMaxLength = activeStart !== null && frame - activeStart >= maxSegmentFrames;
+        const reachedEnd = activeStart !== null && frame === totalFrames - 1;
+
+        if (reachedSilence || reachedMaxLength || reachedEnd) {
+            const speechEndFrame = lastSpeechFrame !== null ? lastSpeechFrame + 1 : frame + 1;
+            const endFrame = Math.min(totalFrames, speechEndFrame + paddingFrames);
+
+            if (lastSpeechFrame !== null && lastSpeechFrame - activeStart + 1 >= minSpeechFrames) {
+                segments.push(segmentFromFrames(activeStart, endFrame, frameSamples, totalSamples));
+            }
+
+            activeStart = null;
+            lastSpeechFrame = null;
+            silentRun = 0;
+        }
+    }
+
+    return mergeCloseSegments(segments);
+}
+
+function segmentFromFrames(startFrame, endFrame, frameSamples, totalSamples) {
+    const startSample = Math.min(totalSamples, startFrame * frameSamples);
+    const endSample = Math.min(totalSamples, Math.max(startSample, endFrame * frameSamples));
+
+    return {
+        startSample,
+        endSample,
+        startMs: Math.round((startSample / SAMPLE_RATE) * 1000),
+        endMs: Math.round((endSample / SAMPLE_RATE) * 1000),
+    };
+}
+
+function mergeCloseSegments(segments) {
+    const maxGapMs = 220;
+    const merged = [];
+
+    for (const segment of segments) {
+        const previous = merged[merged.length - 1];
+
+        if (previous && segment.startMs - previous.endMs <= maxGapMs) {
+            previous.endSample = Math.max(previous.endSample, segment.endSample);
+            previous.endMs = Math.max(previous.endMs, segment.endMs);
+            continue;
+        }
+
+        merged.push({ ...segment });
+    }
+
+    return merged;
+}
+
+function frameRms(pcmBuffer, startSample, endSample) {
+    let total = 0;
+    let count = 0;
+
+    for (let sample = startSample; sample < endSample; sample += 1) {
+        const offset = sample * BYTES_PER_SAMPLE;
+
+        if (offset + 1 >= pcmBuffer.length) {
+            break;
+        }
+
+        const value = pcmBuffer.readInt16LE(offset);
+
+        total += value * value;
+        count += 1;
+    }
+
+    if (count <= 0) {
+        return 0;
+    }
+
+    return Math.sqrt(total / count);
+}
+
+function percentile(values, ratio) {
+    if (!values.length) {
+        return 0;
+    }
+
+    const sorted = [...values].sort((a, b) => a - b);
+    const index = Math.min(sorted.length - 1, Math.max(0, Math.round((sorted.length - 1) * ratio)));
+
+    return sorted[index];
+}
+
+function sortTranscriptSegments(segments) {
+    return [...segments].sort((left, right) => {
+        const leftTime = transcriptSegmentTime(left);
+        const rightTime = transcriptSegmentTime(right);
+
+        if (leftTime !== rightTime) {
+            return leftTime - rightTime;
+        }
+
+        return sourceOrder(left.side) - sourceOrder(right.side);
+    });
+}
+
+function transcriptSegmentTime(segment) {
+    const value = segment.start_ms ?? segment.at_ms ?? segment.startMs ?? 0;
+    const number = Number(value);
+
+    return Number.isFinite(number) ? number : 0;
+}
+
+function sourceOrder(side) {
+    return side === "customer" ? 0 : 1;
+}
+
+function clampNumber(value, min, max) {
+    return Math.max(min, Math.min(max, value));
 }
 
 function writeSilence(stream, samples) {

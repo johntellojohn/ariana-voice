@@ -3,6 +3,7 @@ const wrtc = require("@roamhq/wrtc");
 const env = require("../../config/env");
 const ttsService = require("../tts/tts.service");
 const { AudioOutput } = require("./audio-output");
+const { CallRecording } = require("./call-recording");
 
 const { RTCAudioSink, RTCAudioSource } = wrtc.nonstandard;
 const RTC_AUDIO_FRAME_SAMPLES = 480;
@@ -18,6 +19,17 @@ class HumanBridgeCallSession {
         this.offerSdp = payload.offer_sdp;
         this.tenant = payload.tenant || null;
         this.agentId = payload.agent_id || null;
+        this.callbackUrl = payload.callback_url || null;
+        this.recording = new CallRecording({
+            sessionId: this.sessionId,
+            callId: this.callId,
+            tenant: this.tenant,
+            agentId: this.agentId,
+            callbackUrl: this.callbackUrl,
+            baseUrl: this.baseUrl,
+            mode: payload.mode || "human_bridge",
+            logger: (message, data) => this.log(message, data),
+        });
         this.waitMessage = normalizeWaitMessage(payload.wait_message);
         this.waitToneEnabled = payload.wait_tone_enabled !== false;
         this.waitPosition = Number(payload.wait_position || 0) || 0;
@@ -88,6 +100,7 @@ class HumanBridgeCallSession {
             silenceLogEveryFrames: env.callSilenceLogEveryFrames,
             logAudioChunks: env.callAudioDebug,
             logger: (message, data) => this.log(message, data),
+            onAudioFrame: (frame, metadata) => this.recording.recordAgentPcm(frame, metadata),
         });
         this.metaOutboundTrack = this.metaAudioSource.createTrack();
 
@@ -129,6 +142,7 @@ class HumanBridgeCallSession {
 
             this.metaFramesReceived += 1;
             this.markActivity("meta_audio");
+            this.recording.recordCustomerData(data);
 
             if (this.agentAudioSource) {
                 this.agentAudioSource.onData(data);
@@ -389,6 +403,7 @@ class HumanBridgeCallSession {
             this.agentFramesReceived += 1;
             this.stopWaitingPlayback("agent_audio");
             this.markActivity("agent_audio");
+            this.recording.recordAgentData(data);
 
             if (this.metaAudioSource) {
                 this.metaAudioSource.onData(data);
@@ -528,8 +543,15 @@ class HumanBridgeCallSession {
         }
 
         for (let offset = 0; offset < completeFramesLength; offset += RTC_AUDIO_FRAME_SAMPLES) {
+            const frameSamples = new Int16Array(samples.subarray(offset, offset + RTC_AUDIO_FRAME_SAMPLES));
+
+            this.recording.recordAgentSamples(frameSamples, {
+                sampleRate: 48000,
+                channelCount: 1,
+            });
+
             this.metaAudioSource.onData({
-                samples: new Int16Array(samples.subarray(offset, offset + RTC_AUDIO_FRAME_SAMPLES)),
+                samples: frameSamples,
                 sampleRate: 48000,
                 bitsPerSample: 16,
                 channelCount: 1,
@@ -623,6 +645,8 @@ class HumanBridgeCallSession {
             meta_ws_frames_sent: this.metaWsFramesSent,
             agent_ws_frames_received: this.agentWsFramesReceived,
         });
+
+        await this.recording.finalize(reason);
 
         if (typeof this.onClosed === "function") {
             this.onClosed(this);
@@ -744,6 +768,7 @@ class HumanBridgeCallSession {
             has_meta_peer: Boolean(this.metaPc),
             has_agent_peer: Boolean(this.agentPc),
             has_agent_ws: Boolean(this.agentWs),
+            callback_url: this.callbackUrl,
         };
     }
 

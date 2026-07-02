@@ -6,6 +6,7 @@ const env = require("../../config/env");
 const { callTool } = require("../laravel/voice-agent-tools.service");
 const ttsService = require("../tts/tts.service");
 const { AudioOutput } = require("./audio-output");
+const { CallRecording } = require("./call-recording");
 const { SpeechInterruptionGate } = require("./speech-interruption-gate");
 const { int16ArrayToBuffer } = require("./wav.util");
 
@@ -26,6 +27,16 @@ class RealtimeCallSession {
         this.agentId = payload.agent_id || null;
         this.callbackUrl = payload.callback_url || null;
         this.toolsBaseUrl = payload.tools_base_url || null;
+        this.recording = new CallRecording({
+            sessionId: this.sessionId,
+            callId: this.callId,
+            tenant: this.tenant,
+            agentId: this.agentId,
+            callbackUrl: this.callbackUrl,
+            baseUrl: this.baseUrl,
+            mode: payload.mode || "realtime",
+            logger: (message, data) => this.log(message, data),
+        });
         this.notificationOnly = Boolean(payload.notification_only);
         this.hangupAfterInitialGreeting = Boolean(payload.hangup_after_initial_greeting);
         this.initialGreeting = normalizeInitialGreeting(payload.initial_greeting);
@@ -117,6 +128,7 @@ class RealtimeCallSession {
             silenceLogEveryFrames: env.callSilenceLogEveryFrames,
             logAudioChunks: env.callAudioDebug,
             logger: (message, data) => this.log(message, data),
+            onAudioFrame: (frame, metadata) => this.recording.recordAgentPcm(frame, metadata),
         });
 
         const outboundTrack = this.audioSource.createTrack();
@@ -423,6 +435,7 @@ class RealtimeCallSession {
         }
 
         this.remoteAudioFramesReceived += 1;
+        this.recording.recordCustomerData(data);
 
         if (this.humanTransferActive) {
             this.sendMetaAudioToAgentWebSocket(data);
@@ -822,8 +835,15 @@ class RealtimeCallSession {
         }
 
         for (let offset = 0; offset < completeFramesLength; offset += RTC_AUDIO_FRAME_SAMPLES) {
+            const frameSamples = new Int16Array(samples.subarray(offset, offset + RTC_AUDIO_FRAME_SAMPLES));
+
+            this.recording.recordAgentSamples(frameSamples, {
+                sampleRate: META_SAMPLE_RATE,
+                channelCount: 1,
+            });
+
             this.audioSource.onData({
-                samples: new Int16Array(samples.subarray(offset, offset + RTC_AUDIO_FRAME_SAMPLES)),
+                samples: frameSamples,
                 sampleRate: META_SAMPLE_RATE,
                 bitsPerSample: 16,
                 channelCount: 1,
@@ -1018,6 +1038,8 @@ class RealtimeCallSession {
     async saveTranscript(role, text, event) {
         text = String(text || "").trim();
 
+        this.recording.addTranscriptSegment(role, text, event);
+
         if (!text || !this.toolsBaseUrl) {
             return;
         }
@@ -1174,6 +1196,8 @@ class RealtimeCallSession {
         if (this.pc) {
             this.pc.close();
         }
+
+        await this.recording.finalize(reason);
 
         await this.saveTranscript("system", `call closed: ${reason}`, {
             event_id: `closed-${this.sessionId}`,

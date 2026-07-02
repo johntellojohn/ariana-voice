@@ -8,6 +8,7 @@ const sttService = require("../stt/stt.service");
 const ttsService = require("../tts/tts.service");
 const CallVad = require("./call-vad");
 const { AudioOutput } = require("./audio-output");
+const { CallRecording } = require("./call-recording");
 const { createWavBuffer } = require("./wav.util");
 
 const { RTCAudioSink, RTCAudioSource } = wrtc.nonstandard;
@@ -23,6 +24,16 @@ class CallSession {
         this.tenant = payload.tenant || null;
         this.agentId = payload.agent_id || null;
         this.callbackUrl = payload.callback_url || null;
+        this.recording = new CallRecording({
+            sessionId: this.sessionId,
+            callId: this.callId,
+            tenant: this.tenant,
+            agentId: this.agentId,
+            callbackUrl: this.callbackUrl,
+            baseUrl: this.baseUrl,
+            mode: payload.mode || "legacy",
+            logger: (message, data) => this.log(message, data),
+        });
         this.initialGreeting = normalizeInitialGreeting(payload.initial_greeting);
         this.initialGreetingPending = Boolean(this.initialGreeting);
         this.initialGreetingPlaybackStarted = false;
@@ -109,6 +120,7 @@ class CallSession {
             silenceLogEveryFrames: env.callSilenceLogEveryFrames,
             logAudioChunks: env.callAudioDebug,
             logger: (message, data) => this.log(message, data),
+            onAudioFrame: (frame, metadata) => this.recording.recordAgentPcm(frame, metadata),
         });
 
         const outboundTrack = this.audioSource.createTrack();
@@ -195,6 +207,8 @@ class CallSession {
         if (this.closedAt) {
             return;
         }
+
+        this.recording.recordCustomerData(data);
 
         if (this.shouldIgnoreInboundAudio()) {
             this.vad.reset();
@@ -547,6 +561,8 @@ class CallSession {
         if (this.pc) {
             this.pc.close();
         }
+
+        await this.recording.finalize(reason);
 
         await this.sendCallback({
             event: "ended",

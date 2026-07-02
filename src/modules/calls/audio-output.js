@@ -10,6 +10,7 @@ class AudioOutput {
         this.channelCount = options.channelCount || 1;
         this.frameMs = options.frameMs || 10;
         this.logger = options.logger || null;
+        this.onAudioFrame = typeof options.onAudioFrame === "function" ? options.onAudioFrame : null;
         this.logAudioChunks = Boolean(options.logAudioChunks);
         this.frameSamples = Math.round((this.sampleRate * this.frameMs) / 1000);
         this.frameBytes = this.frameSamples * this.channelCount * 2;
@@ -276,6 +277,20 @@ class AudioOutput {
         }
 
         if (audioBytesSent > 0) {
+            if (this.onAudioFrame) {
+                try {
+                    this.onAudioFrame(frame, {
+                        sampleRate: this.sampleRate,
+                        channelCount: this.channelCount,
+                        frameMs: this.frameMs,
+                    });
+                } catch (error) {
+                    this.log("audio output frame tap failed", {
+                        error: error.message,
+                    });
+                }
+            }
+
             this.audioFramesSent += 1;
             this.markPlaybackFrameSent(audioBytesSent);
         } else {

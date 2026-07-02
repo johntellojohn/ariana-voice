@@ -220,12 +220,12 @@ class CallRecording {
 
         const customerPcm = await fsp.readFile(this.sources.customer.rawPath);
         const agentPcm = await fsp.readFile(this.sources.agent.rawPath);
-        const stereoPcm = interleaveStereo(customerPcm, agentPcm);
+        const mixedPcm = mixMono(customerPcm, agentPcm);
         const filename = `recording-${this.safeSessionId}.wav`;
         const filePath = path.join(env.ttsOutputDir, filename);
-        const wav = createWavBuffer(stereoPcm, {
+        const wav = createWavBuffer(mixedPcm, {
             sampleRate: SAMPLE_RATE,
-            channelCount: 2,
+            channelCount: 1,
         });
 
         await fsp.writeFile(filePath, wav);
@@ -251,9 +251,9 @@ class CallRecording {
                 mode: this.mode,
                 sample_rate: SAMPLE_RATE,
                 channels: {
-                    left: CHANNELS.customer.label,
-                    right: CHANNELS.agent.label,
+                    mixed: [CHANNELS.customer.label, CHANNELS.agent.label],
                 },
+                playback_mix: "mono_centered",
                 customer_frames: this.sources.customer.frames,
                 agent_frames: this.sources.agent.frames,
             },
@@ -449,20 +449,23 @@ function resamplePcm16(buffer, fromRate, toRate) {
     return output;
 }
 
-function interleaveStereo(leftPcm, rightPcm) {
-    const samples = Math.max(leftPcm.length, rightPcm.length) / BYTES_PER_SAMPLE;
-    const output = Buffer.alloc(samples * BYTES_PER_SAMPLE * 2);
+function mixMono(customerPcm, agentPcm) {
+    const samples = Math.max(customerPcm.length, agentPcm.length) / BYTES_PER_SAMPLE;
+    const output = Buffer.alloc(samples * BYTES_PER_SAMPLE);
 
     for (let index = 0; index < samples; index += 1) {
-        const left = index * BYTES_PER_SAMPLE < leftPcm.length
-            ? leftPcm.readInt16LE(index * BYTES_PER_SAMPLE)
+        const offset = index * BYTES_PER_SAMPLE;
+        const customer = offset < customerPcm.length
+            ? customerPcm.readInt16LE(offset)
             : 0;
-        const right = index * BYTES_PER_SAMPLE < rightPcm.length
-            ? rightPcm.readInt16LE(index * BYTES_PER_SAMPLE)
+        const agent = offset < agentPcm.length
+            ? agentPcm.readInt16LE(offset)
             : 0;
+        const mixed = customer !== 0 && agent !== 0
+            ? Math.round((customer + agent) / 2)
+            : customer + agent;
 
-        output.writeInt16LE(left, index * 4);
-        output.writeInt16LE(right, index * 4 + 2);
+        output.writeInt16LE(clampInt16(mixed), offset);
     }
 
     return output;

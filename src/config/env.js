@@ -38,7 +38,7 @@ const env = {
     openaiApiKey: process.env.OPENAI_API_KEY || "",
     openaiSttModel: process.env.OPENAI_STT_MODEL || "gpt-4o-mini-transcribe",
     openaiTtsModel: process.env.OPENAI_TTS_MODEL || "gpt-4o-mini-tts",
-    openaiTtsVoice: process.env.OPENAI_TTS_VOICE || "marin",
+    openaiTtsVoice: process.env.OPENAI_TTS_VOICE || "nova",
     openaiRealtimeModel: process.env.OPENAI_REALTIME_MODEL || "gpt-realtime",
     openaiRealtimeVoice: process.env.OPENAI_REALTIME_VOICE || "marin",
     realtimeTranscriptionModel:

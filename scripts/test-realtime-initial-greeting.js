@@ -183,6 +183,63 @@ async function testNotificationGreetingWaitsBeforeQueueingFirstAudioFrame() {
     assert.deepStrictEqual(calls[1], ["enqueue", "/api/audio/test.mp3"]);
 }
 
+async function testNotificationGreetingUsesConfiguredTtsProfile() {
+    const session = new RealtimeCallSession(
+        {
+            call_id: "call-notification-tts-profile",
+            notification_only: true,
+            realtime: {
+                voice: "marin",
+            },
+            tts: {
+                model: "gpt-4o-mini-tts",
+                voice: "echo",
+                speed: 1.35,
+                instructions: "Lee con tono amable y energia moderada.",
+            },
+        },
+        {
+            sessionId: "session-notification-tts-profile",
+        }
+    );
+    const synthesizeCalls = [];
+
+    session.wait = async () => {};
+    session.audioOutput = {
+        enqueueAudioUrl: async (audioUrl) => ({
+            audioUrl,
+            framesSent: 1,
+            framesQueued: 1,
+            pcmBytes: 960,
+            bytesDownloaded: 128,
+            stopped: false,
+        }),
+    };
+    session.waitForPlaybackReady = async () => true;
+
+    const originalSynthesize = ttsService.synthesize;
+
+    ttsService.synthesize = async (body, options) => {
+        synthesizeCalls.push({ body, options });
+
+        return {
+            audio_url: "/api/audio/profile.mp3",
+        };
+    };
+
+    try {
+        await session.playNotificationGreetingAudio("Hola, prueba de voz.", "test_tts_profile");
+    } finally {
+        ttsService.synthesize = originalSynthesize;
+    }
+
+    assert.strictEqual(synthesizeCalls.length, 1);
+    assert.strictEqual(synthesizeCalls[0].body.model, "gpt-4o-mini-tts");
+    assert.strictEqual(synthesizeCalls[0].body.voice, "echo");
+    assert.strictEqual(synthesizeCalls[0].body.speed, 1.35);
+    assert.strictEqual(synthesizeCalls[0].body.instructions, "Lee con tono amable y energia moderada.");
+}
+
 async function testInitialGreetingWaitsForIceBeforeRequestingAudio() {
     const session = new RealtimeCallSession(
         {
@@ -219,6 +276,7 @@ async function testInitialGreetingWaitsForIceBeforeRequestingAudio() {
     await testNotificationModeDoesNotStreamInboundAudioToRealtime();
     await testNotificationModeIgnoresRealtimeAudioDeltas();
     await testNotificationGreetingWaitsBeforeQueueingFirstAudioFrame();
+    await testNotificationGreetingUsesConfiguredTtsProfile();
     await testInitialGreetingWaitsForIceBeforeRequestingAudio();
 })().catch((error) => {
     console.error(error);

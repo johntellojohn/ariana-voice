@@ -9,6 +9,7 @@ const { AudioOutput } = require("./audio-output");
 const { CallRecording } = require("./call-recording");
 const { SpeechInterruptionGate } = require("./speech-interruption-gate");
 const { int16ArrayToBuffer } = require("./wav.util");
+const { normalizeTtsConfig, toTtsVoice } = require("./voice-profile");
 
 const { RTCAudioSink, RTCAudioSource } = wrtc.nonstandard;
 const REALTIME_SAMPLE_RATE = 24000;
@@ -46,6 +47,7 @@ class RealtimeCallSession {
         this.initialGreetingPending = Boolean(this.initialGreeting);
         this.initialGreetingPlayed = false;
         this.realtime = payload.realtime || {};
+        this.tts = normalizeTtsConfig(payload.tts);
         this.createdAt = new Date();
         this.closedAt = null;
         this.status = "created";
@@ -980,21 +982,28 @@ class RealtimeCallSession {
         // are NOT accepted by the standard TTS HTTP endpoint — sending them
         // causes a 400 error that silently aborts playback.  Map them to the
         // closest valid TTS voice before calling synthesize().
-        const ttsVoice = toTtsVoice(this.voice());
+        const ttsVoice = this.tts.voice || toTtsVoice(this.voice());
+        const ttsInstructions =
+            this.tts.instructions ||
+            "Lee este mensaje de notificacion de forma natural. No agregues saludos, preguntas ni frases finales.";
 
         this.log("notification initial greeting TTS requested", {
             reason,
             text_length: text.length,
             voice: this.voice(),
             tts_voice: ttsVoice,
+            tts_model: this.tts.model || null,
+            tts_speed: this.tts.speed || null,
         });
 
         const ttsResult = await ttsService.synthesize(
             {
                 text,
+                model: this.tts.model,
                 voice: ttsVoice,
-                format: "mp3",
-                instructions: "Lee este mensaje de notificacion de forma natural. No agregues saludos, preguntas ni frases finales.",
+                format: this.tts.format || "mp3",
+                speed: this.tts.speed,
+                instructions: ttsInstructions,
             },
             {
                 baseUrl: this.baseUrl,
@@ -1617,29 +1626,6 @@ function normalizeInitialGreeting(value) {
 
 function wait(ms) {
     return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
-}
-
-// Voices available only in the OpenAI Realtime API → closest TTS HTTP equivalent.
-// The TTS HTTP endpoint rejects any voice not in its own list and returns a 400
-// that, when uncaught inside playNotificationGreetingAudio, silently prevents
-// the notification audio from being enqueued.
-const REALTIME_TO_TTS_VOICE_MAP = {
-    marin: "nova",
-    // Add further mappings here if new Realtime-only voices are introduced.
-};
-
-// Valid voices for the standard TTS HTTP endpoint (audio.speech.create).
-const TTS_HTTP_VOICES = new Set([
-    "alloy", "ash", "ballad", "coral", "echo", "fable",
-    "nova", "onyx", "sage", "shimmer", "verse", "cedar",
-]);
-
-function toTtsVoice(voice) {
-    if (TTS_HTTP_VOICES.has(voice)) {
-        return voice;
-    }
-
-    return REALTIME_TO_TTS_VOICE_MAP[voice] || "nova";
 }
 
 module.exports = RealtimeCallSession;

@@ -4,6 +4,7 @@ const env = require("../../config/env");
 const ttsService = require("../tts/tts.service");
 const { AudioOutput } = require("./audio-output");
 const { CallRecording } = require("./call-recording");
+const { normalizeTtsConfig } = require("./voice-profile");
 
 const { RTCAudioSink, RTCAudioSource } = wrtc.nonstandard;
 const RTC_AUDIO_FRAME_SAMPLES = 480;
@@ -33,6 +34,7 @@ class HumanBridgeCallSession {
         this.waitMessage = normalizeWaitMessage(payload.wait_message);
         this.waitToneEnabled = payload.wait_tone_enabled !== false;
         this.waitPosition = Number(payload.wait_position || 0) || 0;
+        this.tts = normalizeTtsConfig(payload.tts);
         this.createdAt = new Date();
         this.closedAt = null;
         this.status = "created";
@@ -224,13 +226,19 @@ class HumanBridgeCallSession {
     }
 
     async playWaitMessage(reason) {
+        const instructions =
+            this.tts.instructions ||
+            "Lee este mensaje de espera de forma calmada y natural. No agregues frases nuevas.";
+
         const ttsResult = await ttsService.synthesize(
             {
                 text: this.waitMessage,
-                voice: "nova",
+                model: this.tts.model,
+                voice: this.tts.voice || "nova",
                 format: "mp3",
+                speed: this.tts.speed,
                 return_audio_base64: true,
-                instructions: "Lee este mensaje de espera de forma calmada y natural. No agregues frases nuevas.",
+                instructions,
             },
             {
                 baseUrl: this.baseUrl,

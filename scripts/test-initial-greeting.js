@@ -24,6 +24,12 @@ async function testInitialGreetingPlaysOnlyOnce() {
             phone_number_id: "phone-1",
             offer_sdp: "v=0\r\n",
             initial_greeting: " Hola, gracias por llamar. ",
+            tts: {
+                model: "gpt-4o-mini-tts",
+                voice: "sage",
+                speed: 1.25,
+                instructions: "Lee con voz calida y pausada.",
+            },
         }, {
             sessionId: "session-1",
             baseUrl: "http://localhost",
@@ -46,7 +52,11 @@ async function testInitialGreetingPlaysOnlyOnce() {
 
         assert.strictEqual(calls.synthesize.length, 1);
         assert.strictEqual(calls.synthesize[0].body.text, "Hola, gracias por llamar.");
+        assert.strictEqual(calls.synthesize[0].body.model, "gpt-4o-mini-tts");
+        assert.strictEqual(calls.synthesize[0].body.voice, "sage");
+        assert.strictEqual(calls.synthesize[0].body.speed, 1.25);
         assert.strictEqual(calls.synthesize[0].body.format, "mp3");
+        assert.strictEqual(calls.synthesize[0].body.instructions, "Lee con voz calida y pausada.");
         assert.strictEqual(calls.playback.length, 1);
         assert.deepStrictEqual(calls.playback[0], {
             audioUrl: "http://localhost/greeting.mp3",

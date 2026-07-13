@@ -10,6 +10,7 @@ const CallVad = require("./call-vad");
 const { AudioOutput } = require("./audio-output");
 const { CallRecording } = require("./call-recording");
 const { createWavBuffer } = require("./wav.util");
+const { normalizeTtsConfig, toTtsVoice } = require("./voice-profile");
 
 const { RTCAudioSink, RTCAudioSource } = wrtc.nonstandard;
 
@@ -38,6 +39,7 @@ class CallSession {
         this.initialGreetingPending = Boolean(this.initialGreeting);
         this.initialGreetingPlaybackStarted = false;
         this.initialGreetingPlayed = false;
+        this.tts = normalizeTtsConfig(payload.tts);
         this.language = resolveCallLanguage(payload.language);
         this.createdAt = new Date();
         this.closedAt = null;
@@ -345,9 +347,11 @@ class CallSession {
         const ttsResult = await ttsService.synthesize(
             {
                 text: reply.text,
-                voice: reply.voice,
-                format: reply.format || "mp3",
-                instructions: reply.instructions,
+                model: reply.model || this.tts.model,
+                voice: reply.voice ? toTtsVoice(reply.voice) : this.tts.voice,
+                format: reply.format || this.tts.format || "mp3",
+                speed: reply.speed || this.tts.speed,
+                instructions: reply.instructions || this.tts.instructions,
             },
             {
                 baseUrl: this.baseUrl,
@@ -388,7 +392,11 @@ class CallSession {
             const ttsResult = await ttsService.synthesize(
                 {
                     text: this.initialGreeting,
-                    format: "mp3",
+                    model: this.tts.model,
+                    voice: this.tts.voice,
+                    format: this.tts.format || "mp3",
+                    speed: this.tts.speed,
+                    instructions: this.tts.instructions,
                 },
                 {
                     baseUrl: this.baseUrl,

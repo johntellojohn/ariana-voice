@@ -19,4 +19,37 @@ function testKnowledgeToolWinsInformationalTeamQuestions() {
     assert.match(checkAvailability.description, /No la uses para preguntas informativas/i);
 }
 
+function testCustomerLookupToolsHaveSeparateResponsibilities() {
+    const session = new RealtimeCallSession({
+        call_id: "call-test",
+        dynamic_tools: [
+            {
+                type: "function",
+                function: {
+                    name: "consultar_cliente",
+                    description: "Busca informacion de otro cliente existente en EVA.",
+                    parameters: {
+                        type: "object",
+                        properties: {
+                            criterio: { type: "string" },
+                        },
+                        required: ["criterio"],
+                        additionalProperties: false,
+                    },
+                },
+            },
+        ],
+    }, { sessionId: "session-test" });
+    const searchCustomer = findTool(session, "search_customer");
+    const consultarCliente = findTool(session, "consultar_cliente");
+
+    assert(searchCustomer, "search_customer tool not found");
+    assert(consultarCliente, "consultar_cliente tool not found");
+    assert.match(searchCustomer.description, /llamada actual/i);
+    assert.match(searchCustomer.description, /No la uses para buscar otros clientes/i);
+    assert.match(consultarCliente.description, /otro cliente existente/i);
+    assert(consultarCliente.parameters.required.includes("criterio"));
+}
+
 testKnowledgeToolWinsInformationalTeamQuestions();
+testCustomerLookupToolsHaveSeparateResponsibilities();

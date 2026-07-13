@@ -27,6 +27,7 @@ class RealtimeCallSession {
         this.agentId = payload.agent_id || null;
         this.callbackUrl = payload.callback_url || null;
         this.toolsBaseUrl = payload.tools_base_url || null;
+        this.dynamicTools = normalizeDynamicTools(payload.dynamic_tools);
         this.recording = new CallRecording({
             sessionId: this.sessionId,
             callId: this.callId,
@@ -252,7 +253,7 @@ class RealtimeCallSession {
     }
 
     tools() {
-        return [
+        const baseTools = [
             functionTool("get_agent_context", "Obtiene contexto vigente de agente, llamada y configuracion.", {
                 type: "object",
                 properties: {},
@@ -271,7 +272,7 @@ class RealtimeCallSession {
                     additionalProperties: false,
                 }
             ),
-            functionTool("search_customer", "Consulta el cliente asociado a la llamada.", {
+            functionTool("search_customer", "Consulta solo el cliente asociado a la llamada actual. No la uses para buscar otros clientes por nombre, apellido, celular, correo o identificacion.", {
                 type: "object",
                 properties: {},
                 additionalProperties: false,
@@ -367,6 +368,10 @@ class RealtimeCallSession {
                 additionalProperties: false,
             }),
         ];
+        const existingNames = new Set(baseTools.map((tool) => tool.name));
+        const dynamicTools = this.dynamicTools.filter((tool) => !existingNames.has(tool.name));
+
+        return [...baseTools, ...dynamicTools];
     }
 
     turnDetection() {
@@ -1323,7 +1328,12 @@ class RealtimeCallSession {
             return base;
         }
 
-        return `${base}
+        const dynamicToolNames = this.dynamicTools.map((tool) => tool.name).join(", ");
+        const dynamicToolsInstructions = dynamicToolNames
+            ? `\n\nHerramientas dinamicas del agente:\n- Tienes disponibles estas tools configuradas en EVA: ${dynamicToolNames}.\n- Usalas solo cuando la intencion del cliente coincida con la descripcion de la tool.\n- Si falta un campo requerido, pide solo ese dato y luego ejecuta la tool.\n- No digas que no puedes usar una capacidad si existe una tool dinamica adecuada.`
+            : "";
+
+        return `${base}${dynamicToolsInstructions}
 
 Transferencia a humano:
 - Si el cliente pide hablar con una persona, asesor, soporte, recepcion o agente humano, usa la herramienta transfer_to_human con trigger "customer_request".
@@ -1356,6 +1366,54 @@ function functionTool(name, description, parameters) {
         description,
         parameters,
     };
+}
+
+function normalizeDynamicTools(value) {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+
+    return value
+        .map((tool) => {
+            const source = tool && tool.function && typeof tool.function === "object"
+                ? tool.function
+                : tool;
+            const name = String((source && source.name) || "").trim();
+
+            if (!isValidToolName(name)) {
+                return null;
+            }
+
+            return functionTool(
+                name,
+                String((source && source.description) || name),
+                normalizeToolParameters(source && source.parameters)
+            );
+        })
+        .filter(Boolean);
+}
+
+function normalizeToolParameters(parameters) {
+    if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) {
+        return {
+            type: "object",
+            properties: {},
+            additionalProperties: false,
+        };
+    }
+
+    return {
+        type: parameters.type || "object",
+        properties: parameters.properties && typeof parameters.properties === "object"
+            ? parameters.properties
+            : {},
+        required: Array.isArray(parameters.required) ? parameters.required : [],
+        additionalProperties: parameters.additionalProperties === true,
+    };
+}
+
+function isValidToolName(name) {
+    return /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(name);
 }
 
 function waitForOpenSocket(socket, timeoutMs) {

@@ -162,7 +162,45 @@ class OutboundRealtimeCallSession extends RealtimeCallSession {
             return;
         }
 
-        await this.close("notification_initial_greeting_completed");
+        const reason = "notification_initial_greeting_completed";
+
+        await this.requestNotificationMetaHangup(reason);
+
+        await this.close(reason);
+    }
+
+    async requestNotificationMetaHangup(reason) {
+        if (this.notificationMetaHangupRequested) {
+            return;
+        }
+
+        this.notificationMetaHangupRequested = true;
+
+        if (!this.callbackUrl) {
+            return;
+        }
+
+        this.log("requesting meta hangup after notification playback", {
+            reason,
+            callback_url: this.callbackUrl,
+        });
+
+        await this.sendCallback({
+            event: "ended",
+            session_id: this.sessionId,
+            call_id: this.callId,
+            reason,
+            tenant: this.tenant,
+            agent_id: this.agentId,
+            notification_only: this.notificationOnly,
+            hangup_meta: true,
+        }).catch((error) => {
+            this.notificationMetaHangupRequested = false;
+            this.log("could not request meta hangup after notification playback", {
+                reason,
+                error: error.message,
+            });
+        });
     }
 
     async waitForNotificationAudioDrained() {

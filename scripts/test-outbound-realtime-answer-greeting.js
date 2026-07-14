@@ -210,6 +210,41 @@ async function testNotificationTtsGreetingSchedulesCloseAfterPlayback() {
     assert.deepStrictEqual(closes, ["notification_initial_greeting_completed"]);
 }
 
+async function testNotificationCloseRequestsMetaHangupBeforeLocalClose() {
+    const session = new OutboundRealtimeCallSession(
+        {
+            call_id: "call-outbound-notification-hangup",
+            phone_number_id: "phone-1",
+            initial_greeting: "Hola, este mensaje debe colgar al final.",
+            notification_only: true,
+            hangup_after_initial_greeting: true,
+            callback_url: "https://eva.test/api/voice-calls/events",
+            realtime: {},
+        },
+        {
+            sessionId: "session-outbound-notification-hangup",
+        }
+    );
+    const actions = [];
+
+    session.audioOutput = {
+        hasPendingAudio: () => false,
+    };
+    session.sendCallback = async (payload) => {
+        actions.push(["callback", payload.event, payload.hangup_meta, payload.reason]);
+    };
+    session.close = async (reason) => {
+        actions.push(["close", reason]);
+    };
+
+    await session.closeAfterNotificationAudio();
+
+    assert.deepStrictEqual(actions, [
+        ["callback", "ended", true, "notification_initial_greeting_completed"],
+        ["close", "notification_initial_greeting_completed"],
+    ]);
+}
+
 async function testNotificationTtsGreetingUsesBase64PlaybackWhenAvailable() {
     const originalSynthesize = ttsService.synthesize;
     const synthesizeCalls = [];
@@ -296,6 +331,7 @@ function wait(ms) {
     await testNotificationOutboundSkipsRealtimeTransport();
     await testNotificationCloseWaitsForQueuedAudio();
     await testNotificationTtsGreetingSchedulesCloseAfterPlayback();
+    await testNotificationCloseRequestsMetaHangupBeforeLocalClose();
     await testNotificationTtsGreetingUsesBase64PlaybackWhenAvailable();
 })().catch((error) => {
     console.error(error);

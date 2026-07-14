@@ -1,6 +1,7 @@
 const assert = require("assert");
 
 const OutboundRealtimeCallSession = require("../src/modules/calls/outbound-realtime-call-session");
+const ttsService = require("../src/modules/tts/tts.service");
 
 async function testOutboundAnswerTriggersInitialGreeting() {
     const session = new OutboundRealtimeCallSession(
@@ -25,6 +26,7 @@ async function testOutboundAnswerTriggersInitialGreeting() {
     };
     session.playInitialGreeting = async (reason) => {
         calls.push(reason);
+        session.initialGreetingPlayed = true;
         return true;
     };
 
@@ -62,7 +64,7 @@ async function testOutboundAnswerNormalizesEscapedLineBreaks() {
     assert.strictEqual(appliedSdp, "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n");
 }
 
-async function testNotificationAnswerWaitsForRemoteMediaBeforeGreeting() {
+async function testNotificationAnswerTriggersGreetingWithoutRealtimeEvent() {
     const session = new OutboundRealtimeCallSession(
         {
             call_id: "call-outbound-notification-answer",
@@ -95,15 +97,7 @@ async function testNotificationAnswerWaitsForRemoteMediaBeforeGreeting() {
 
     await session.applyAnswer("v=0\r\nfake-answer");
 
-    assert.deepStrictEqual(calls, []);
-
-    session.handleAudioData({
-        samples: new Int16Array([0, 0, 0, 0]),
-        sampleRate: 48000,
-        channelCount: 1,
-    });
-
-    assert.deepStrictEqual(calls, ["remote_audio_received"]);
+    assert.deepStrictEqual(calls, ["outbound_answer_applied"]);
     assert.deepStrictEqual(events, []);
 }
 
@@ -209,6 +203,81 @@ async function testNotificationTtsGreetingSchedulesCloseAfterPlayback() {
     assert.deepStrictEqual(closes, ["notification_initial_greeting_completed"]);
 }
 
+async function testNotificationTtsGreetingUsesBase64PlaybackWhenAvailable() {
+    const originalSynthesize = ttsService.synthesize;
+    const synthesizeCalls = [];
+    const bufferPlaybackCalls = [];
+    const urlPlaybackCalls = [];
+
+    ttsService.synthesize = async (body, options) => {
+        synthesizeCalls.push({ body, options });
+
+        return {
+            audio_base64: Buffer.from("fake-mp3").toString("base64"),
+            audio_url: "https://voice.test/api/audio/notification.mp3",
+            format: "mp3",
+            mime_type: "audio/mpeg",
+        };
+    };
+
+    try {
+        const session = new OutboundRealtimeCallSession(
+            {
+                call_id: "call-outbound-notification-base64",
+                phone_number_id: "phone-1",
+                initial_greeting: "Hola, este es un mensaje de notificacion.",
+                notification_only: true,
+                hangup_after_initial_greeting: true,
+                tts: {
+                    model: "gpt-4o-mini-tts",
+                    voice: "ash",
+                    speed: 1,
+                },
+                realtime: {},
+            },
+            {
+                sessionId: "session-outbound-notification-base64",
+                baseUrl: "https://voice.test",
+            }
+        );
+
+        session.audioOutput = {
+            enqueueAudioBuffer: async (audioBuffer, metadata) => {
+                bufferPlaybackCalls.push({ audioBuffer, metadata });
+
+                return {
+                    framesSent: 1,
+                    framesQueued: 1,
+                    pcmBytes: 960,
+                    stopped: false,
+                };
+            },
+            enqueueAudioUrl: async (audioUrl, metadata) => {
+                urlPlaybackCalls.push({ audioUrl, metadata });
+            },
+        };
+        session.pc = {
+            connectionState: "connected",
+            iceConnectionState: "completed",
+        };
+
+        await session.playNotificationGreetingAudio(
+            "Hola, este es un mensaje de notificacion.",
+            "unit_test"
+        );
+
+        assert.strictEqual(synthesizeCalls.length, 1);
+        assert.strictEqual(synthesizeCalls[0].body.return_audio_base64, true);
+        assert.strictEqual(synthesizeCalls[0].body.voice, "ash");
+        assert.strictEqual(bufferPlaybackCalls.length, 1);
+        assert.strictEqual(bufferPlaybackCalls[0].audioBuffer.toString(), "fake-mp3");
+        assert.strictEqual(bufferPlaybackCalls[0].metadata.source, "notification_initial_greeting");
+        assert.strictEqual(urlPlaybackCalls.length, 0);
+    } finally {
+        ttsService.synthesize = originalSynthesize;
+    }
+}
+
 function wait(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -216,10 +285,11 @@ function wait(ms) {
 (async () => {
     await testOutboundAnswerTriggersInitialGreeting();
     await testOutboundAnswerNormalizesEscapedLineBreaks();
-    await testNotificationAnswerWaitsForRemoteMediaBeforeGreeting();
+    await testNotificationAnswerTriggersGreetingWithoutRealtimeEvent();
     await testNotificationOutboundSkipsRealtimeTransport();
     await testNotificationCloseWaitsForQueuedAudio();
     await testNotificationTtsGreetingSchedulesCloseAfterPlayback();
+    await testNotificationTtsGreetingUsesBase64PlaybackWhenAvailable();
 })().catch((error) => {
     console.error(error);
     process.exit(1);

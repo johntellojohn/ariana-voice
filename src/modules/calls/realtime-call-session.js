@@ -1003,6 +1003,7 @@ class RealtimeCallSession {
                 voice: ttsVoice,
                 format: this.tts.format || "mp3",
                 speed: this.tts.speed,
+                return_audio_base64: true,
                 instructions: ttsInstructions,
             },
             {
@@ -1010,8 +1011,8 @@ class RealtimeCallSession {
             }
         );
 
-        if (!ttsResult.audio_url) {
-            throw new Error("Notification initial greeting TTS did not return audio_url");
+        if (!ttsResult.audio_base64 && !ttsResult.audio_url) {
+            throw new Error("Notification initial greeting TTS did not return audio_base64 or audio_url");
         }
 
         this.outputActive = true;
@@ -1027,10 +1028,21 @@ class RealtimeCallSession {
                 await this.wait(env.callInitialPlaybackPrerollMs);
             }
 
-            playback = await this.audioOutput.enqueueAudioUrl(ttsResult.audio_url, {
-                source: "notification_initial_greeting",
-                reason,
-            });
+            if (ttsResult.audio_base64) {
+                const audioBuffer = Buffer.from(ttsResult.audio_base64, "base64");
+
+                playback = await this.audioOutput.enqueueAudioBuffer(audioBuffer, {
+                    source: "notification_initial_greeting",
+                    reason,
+                    format: ttsResult.format || "mp3",
+                    mime_type: ttsResult.mime_type || "audio/mpeg",
+                });
+            } else {
+                playback = await this.audioOutput.enqueueAudioUrl(ttsResult.audio_url, {
+                    source: "notification_initial_greeting",
+                    reason,
+                });
+            }
         } finally {
             this.outputActive = false;
             this.inputMutedUntil = Date.now() + env.callPostPlaybackMuteMs;
@@ -1040,6 +1052,7 @@ class RealtimeCallSession {
 
         this.log("notification initial greeting playback complete", {
             reason,
+            delivery: ttsResult.audio_base64 ? "base64" : "audio_url",
             audio_url: ttsResult.audio_url,
             frames_sent: playback ? playback.framesSent : null,
             frames_queued: playback ? playback.framesQueued : null,

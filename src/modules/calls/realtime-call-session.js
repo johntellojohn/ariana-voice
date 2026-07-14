@@ -46,6 +46,8 @@ class RealtimeCallSession {
         this.initialGreetingPlaybackPreparing = false;
         this.initialGreetingPending = Boolean(this.initialGreeting);
         this.initialGreetingPlayed = false;
+        this.notificationGreetingPreparation = null;
+        this.notificationGreetingPreparedAudio = null;
         this.realtime = payload.realtime || {};
         this.tts = normalizeTtsConfig(payload.tts);
         this.createdAt = new Date();
@@ -978,6 +980,102 @@ class RealtimeCallSession {
     }
 
     async playNotificationGreetingAudio(text, reason) {
+        const prepared = await this.prepareNotificationGreetingAudio(text, reason);
+
+        return this.playPreparedNotificationGreetingAudio(prepared, reason);
+    }
+
+    async playPreparedNotificationGreetingAudio(prepared, reason) {
+        if (!prepared || (!prepared.audioBuffer && !prepared.ttsResult.audio_url)) {
+            throw new Error("Notification initial greeting TTS did not return audio_base64 or audio_url");
+        }
+
+        if (this.notificationGreetingPreparedAudio === prepared) {
+            this.notificationGreetingPreparedAudio = null;
+        }
+
+        this.outputActive = true;
+
+        let playback = null;
+
+        try {
+            if (env.callInitialPlaybackPrerollMs > 0) {
+                this.log("waiting before initial notification playback", {
+                    reason,
+                    delay_ms: env.callInitialPlaybackPrerollMs,
+                });
+                await this.wait(env.callInitialPlaybackPrerollMs);
+            }
+
+            if (prepared.audioBuffer) {
+                playback = await this.audioOutput.enqueueAudioBuffer(prepared.audioBuffer, {
+                    source: "notification_initial_greeting",
+                    reason,
+                    format: prepared.ttsResult.format || "mp3",
+                    mime_type: prepared.ttsResult.mime_type || "audio/mpeg",
+                });
+            } else {
+                playback = await this.audioOutput.enqueueAudioUrl(prepared.ttsResult.audio_url, {
+                    source: "notification_initial_greeting",
+                    reason,
+                });
+            }
+        } finally {
+            this.outputActive = false;
+            this.inputMutedUntil = Date.now() + env.callPostPlaybackMuteMs;
+            this.markActivity("notification_initial_greeting_played");
+            this.lastPlaybackAt = this.lastActivityAt;
+        }
+
+        this.log("notification initial greeting playback complete", {
+            reason,
+            delivery: prepared.audioBuffer ? "base64" : "audio_url",
+            audio_url: prepared.ttsResult.audio_url,
+            frames_sent: playback ? playback.framesSent : null,
+            frames_queued: playback ? playback.framesQueued : null,
+            pcm_bytes: playback ? playback.pcmBytes : null,
+            bytes_downloaded: playback ? playback.bytesDownloaded : null,
+            stopped: playback ? playback.stopped : null,
+        });
+    }
+
+    prepareNotificationGreetingAudio(text, reason = "prepare") {
+        if (!text) {
+            return Promise.resolve(null);
+        }
+
+        if (this.notificationGreetingPreparedAudio && this.notificationGreetingPreparedAudio.text === text) {
+            return Promise.resolve(this.notificationGreetingPreparedAudio);
+        }
+
+        if (this.notificationGreetingPreparation && this.notificationGreetingPreparation.text === text) {
+            return this.notificationGreetingPreparation;
+        }
+
+        const preparation = this.synthesizeNotificationGreetingAudio(text, reason)
+            .then((prepared) => {
+                if (this.notificationGreetingPreparation === preparation) {
+                    this.notificationGreetingPreparation = null;
+                }
+
+                this.notificationGreetingPreparedAudio = prepared;
+                return prepared;
+            })
+            .catch((error) => {
+                if (this.notificationGreetingPreparation === preparation) {
+                    this.notificationGreetingPreparation = null;
+                }
+
+                throw error;
+            });
+
+        preparation.text = text;
+        this.notificationGreetingPreparation = preparation;
+
+        return preparation;
+    }
+
+    async synthesizeNotificationGreetingAudio(text, reason) {
         // Some voices (e.g. "marin") exist only in the OpenAI Realtime API and
         // are NOT accepted by the standard TTS HTTP endpoint — sending them
         // causes a 400 error that silently aborts playback.  Map them to the
@@ -1015,51 +1113,20 @@ class RealtimeCallSession {
             throw new Error("Notification initial greeting TTS did not return audio_base64 or audio_url");
         }
 
-        this.outputActive = true;
+        const prepared = {
+            text,
+            ttsResult,
+            audioBuffer: ttsResult.audio_base64 ? Buffer.from(ttsResult.audio_base64, "base64") : null,
+        };
 
-        let playback = null;
-
-        try {
-            if (env.callInitialPlaybackPrerollMs > 0) {
-                this.log("waiting before initial notification playback", {
-                    reason,
-                    delay_ms: env.callInitialPlaybackPrerollMs,
-                });
-                await this.wait(env.callInitialPlaybackPrerollMs);
-            }
-
-            if (ttsResult.audio_base64) {
-                const audioBuffer = Buffer.from(ttsResult.audio_base64, "base64");
-
-                playback = await this.audioOutput.enqueueAudioBuffer(audioBuffer, {
-                    source: "notification_initial_greeting",
-                    reason,
-                    format: ttsResult.format || "mp3",
-                    mime_type: ttsResult.mime_type || "audio/mpeg",
-                });
-            } else {
-                playback = await this.audioOutput.enqueueAudioUrl(ttsResult.audio_url, {
-                    source: "notification_initial_greeting",
-                    reason,
-                });
-            }
-        } finally {
-            this.outputActive = false;
-            this.inputMutedUntil = Date.now() + env.callPostPlaybackMuteMs;
-            this.markActivity("notification_initial_greeting_played");
-            this.lastPlaybackAt = this.lastActivityAt;
-        }
-
-        this.log("notification initial greeting playback complete", {
+        this.log("notification initial greeting TTS prepared", {
             reason,
-            delivery: ttsResult.audio_base64 ? "base64" : "audio_url",
-            audio_url: ttsResult.audio_url,
-            frames_sent: playback ? playback.framesSent : null,
-            frames_queued: playback ? playback.framesQueued : null,
-            pcm_bytes: playback ? playback.pcmBytes : null,
-            bytes_downloaded: playback ? playback.bytesDownloaded : null,
-            stopped: playback ? playback.stopped : null,
+            delivery: prepared.audioBuffer ? "base64" : "audio_url",
+            audio_url: ttsResult.audio_url || null,
+            bytes: prepared.audioBuffer ? prepared.audioBuffer.length : null,
         });
+
+        return prepared;
     }
 
     async saveTranscript(role, text, event) {

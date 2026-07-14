@@ -116,14 +116,21 @@ async function testNotificationOutboundSkipsRealtimeTransport() {
         }
     );
     let realtimeConnections = 0;
+    let notificationPreloads = 0;
 
     session.connectRealtime = async () => {
         realtimeConnections++;
+    };
+    session.prepareNotificationGreetingAudio = async (text, reason) => {
+        notificationPreloads++;
+        assert.strictEqual(text, "Hola, este es un mensaje de notificacion.");
+        assert.strictEqual(reason, "outbound_preload");
     };
 
     await session.prepareRealtimeTransportForOutbound();
 
     assert.strictEqual(realtimeConnections, 0);
+    assert.strictEqual(notificationPreloads, 1);
     assert.strictEqual(session.realtimeReady, true);
 }
 

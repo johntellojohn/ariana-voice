@@ -47,6 +47,14 @@ class OutboundRealtimeCallSession extends RealtimeCallSession {
         this.log("notification outbound session using local TTS without realtime websocket", {
             notification_only: true,
         });
+
+        if (this.initialGreeting) {
+            this.prepareNotificationGreetingAudio(this.initialGreeting, "outbound_preload").catch((error) => {
+                this.log("notification initial greeting preload failed", {
+                    error: error.message,
+                });
+            });
+        }
     }
 
     async applyAnswer(answerSdp) {
@@ -109,7 +117,7 @@ class OutboundRealtimeCallSession extends RealtimeCallSession {
             this.hangupAfterInitialGreeting &&
             this.initialGreetingPlayed
         ) {
-            this.scheduleNotificationClose();
+            await this.closeAfterNotificationAudio();
         }
 
         return played;

@@ -136,6 +136,38 @@ async function testNotificationModeIgnoresRealtimeAudioDeltas() {
     assert.strictEqual(queued, 0);
 }
 
+async function testRealtimeSessionConfigUsesAudioOutputSpeed() {
+    const session = new RealtimeCallSession(
+        {
+            call_id: "call-realtime-speed",
+            realtime: {
+                speed: 1.35,
+            },
+        },
+        {
+            sessionId: "session-realtime-speed",
+        }
+    );
+
+    assert.strictEqual(session.sessionConfig().audio.output.speed, 1.35);
+}
+
+async function testRealtimeSessionConfigClampsAudioOutputSpeed() {
+    const session = new RealtimeCallSession(
+        {
+            call_id: "call-realtime-speed-clamped",
+            realtime: {
+                speed: 3.85,
+            },
+        },
+        {
+            sessionId: "session-realtime-speed-clamped",
+        }
+    );
+
+    assert.strictEqual(session.sessionConfig().audio.output.speed, 1.5);
+}
+
 async function testNotificationGreetingWaitsBeforeQueueingFirstAudioFrame() {
     const session = new RealtimeCallSession(
         {
@@ -275,6 +307,8 @@ async function testInitialGreetingWaitsForIceBeforeRequestingAudio() {
     await testNotificationInitialGreetingUsesExactTtsPlayback();
     await testNotificationModeDoesNotStreamInboundAudioToRealtime();
     await testNotificationModeIgnoresRealtimeAudioDeltas();
+    await testRealtimeSessionConfigUsesAudioOutputSpeed();
+    await testRealtimeSessionConfigClampsAudioOutputSpeed();
     await testNotificationGreetingWaitsBeforeQueueingFirstAudioFrame();
     await testNotificationGreetingUsesConfiguredTtsProfile();
     await testInitialGreetingWaitsForIceBeforeRequestingAudio();

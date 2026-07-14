@@ -248,6 +248,7 @@ class RealtimeCallSession {
                         rate: REALTIME_SAMPLE_RATE,
                     },
                     voice: this.voice(),
+                    speed: this.realtimeSpeed(),
                 },
             },
             tools,
@@ -1404,6 +1405,16 @@ class RealtimeCallSession {
 
     voice() {
         return this.realtime.voice || env.openaiRealtimeVoice;
+    }
+
+    realtimeSpeed() {
+        const speed = Number(this.realtime.speed);
+
+        if (!Number.isFinite(speed)) {
+            return 1;
+        }
+
+        return Math.min(1.5, Math.max(0.25, speed));
     }
 
     language() {

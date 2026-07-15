@@ -136,6 +136,22 @@ async function connectAgent(req, res, next) {
     }
 }
 
+async function activateAi(req, res, next) {
+    try {
+        const snapshot = await callSessionManager.activateAi(
+            req.params.session_id,
+            req.body || {}
+        );
+
+        res.json({
+            ok: true,
+            data: snapshot,
+        });
+    } catch (error) {
+        next(error);
+    }
+}
+
 module.exports = {
     createSession,
     createOutboundSession,
@@ -143,5 +159,6 @@ module.exports = {
     showSession,
     applySessionAnswer,
     connectAgent,
+    activateAi,
     closeSession,
 };

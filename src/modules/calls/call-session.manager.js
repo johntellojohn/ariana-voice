@@ -169,6 +169,24 @@ async function connectAgent(sessionId, offerSdp, options = {}) {
     return session.connectAgent(offerSdp, options);
 }
 
+async function activateAi(sessionId, payload = {}) {
+    const session = getSession(sessionId);
+
+    if (!session) {
+        const error = new Error("Call session not found");
+        error.status = 404;
+        throw error;
+    }
+
+    if (typeof session.activateAi !== "function") {
+        const error = new Error("Call session does not support AI reactivation");
+        error.status = 409;
+        throw error;
+    }
+
+    return session.activateAi(payload);
+}
+
 function removeSession(session) {
     sessions.delete(session.sessionId);
 
@@ -223,6 +241,7 @@ module.exports = {
     createOutboundSession,
     applySessionAnswer,
     connectAgent,
+    activateAi,
     getSession,
     getSessionByCallId,
     closeSession,

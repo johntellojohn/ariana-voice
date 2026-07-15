@@ -50,6 +50,9 @@ class RealtimeCallSession {
         this.notificationGreetingPreparedAudio = null;
         this.realtime = payload.realtime || {};
         this.tts = normalizeTtsConfig(payload.tts);
+        this.handoffContext = normalizeHandoffText(payload.handoff_context);
+        this.activeTransferId = null;
+        this.completedTransferIds = new Set();
         this.createdAt = new Date();
         this.closedAt = null;
         this.status = "created";
@@ -220,6 +223,164 @@ class RealtimeCallSession {
         await sessionUpdateAck;
         this.realtimeReady = true;
 
+    }
+
+    async activateAi(payload = {}) {
+        if (this.closedAt || !this.pc) {
+            const error = new Error("Call session is not active");
+            error.status = 409;
+            throw error;
+        }
+
+        const transferId = String(payload.transfer_id || "").trim();
+
+        if (!transferId) {
+            const error = new Error("transfer_id is required");
+            error.status = 422;
+            throw error;
+        }
+
+        if (this.completedTransferIds.has(transferId)) {
+            return this.snapshot();
+        }
+
+        if (!this.humanTransferActive) {
+            const error = new Error("Call session is not currently assigned to a human agent");
+            error.status = 409;
+            throw error;
+        }
+
+        if (this.activeTransferId) {
+            const error = new Error("Another participant transfer is already in progress");
+            error.status = 409;
+            throw error;
+        }
+
+        const previous = this.aiProfileSnapshot();
+        const humanWs = this.agentWs;
+        const humanAgentId = this.activeAgentId;
+        this.activeTransferId = transferId;
+        this.status = "ai_preparing";
+        this.markActivity("ai_transfer_preparing");
+        this.applyAiProfile(payload);
+
+        try {
+            await this.connectRealtime();
+        } catch (error) {
+            const failedSocket = this.realtimeSocket;
+
+            if (failedSocket && failedSocket.readyState !== WebSocket.CLOSED) {
+                failedSocket.close(1011, "ai_transfer_failed");
+            }
+
+            this.restoreAiProfile(previous);
+            this.status = humanWs && humanWs.readyState === WebSocket.OPEN
+                ? "agent_ws_connected"
+                : "human_transfer_active";
+            this.activeTransferId = null;
+            this.markActivity("ai_transfer_failed");
+            throw error;
+        }
+
+        this.humanTransferActive = false;
+        this.realtimeClosedForHumanTransfer = false;
+        this.pendingHumanTransferRealtimeClose = false;
+        this.agentWs = null;
+        this.activeAgentId = null;
+        this.agentWsSampleRemainder = null;
+        this.toolGeneration += 1;
+        this.responseGeneration += 1;
+        this.inputSpeechFrames = [];
+        this.interruptionGate.cancelPending();
+
+        if (this.audioOutput) {
+            this.audioOutput.start();
+        }
+
+        if (humanWs && humanWs.readyState === WebSocket.OPEN) {
+            humanWs.close(1000, "transferred_to_ai");
+        }
+
+        this.recording.addParticipantTransition({
+            transfer_id: transferId,
+            from_type: "human",
+            from_id: humanAgentId,
+            to_type: "ai",
+            to_id: this.agentId,
+        });
+        this.recording.agentId = this.agentId;
+        this.completedTransferIds.add(transferId);
+        this.activeTransferId = null;
+        this.status = "ai_active";
+        this.markActivity("ai_transfer_active");
+        this.log("realtime AI reactivated after human transfer", {
+            transfer_id: transferId,
+            from_agent_id: humanAgentId,
+            ai_agent_id: this.agentId,
+            has_handoff_context: Boolean(this.handoffContext),
+            has_handoff_greeting: Boolean(this.initialGreeting),
+        });
+
+        if (this.initialGreeting) {
+            this.playInitialGreeting("human_to_ai_transfer").catch((error) => {
+                this.log("realtime handoff greeting failed", {
+                    transfer_id: transferId,
+                    error: error.message,
+                });
+            });
+        }
+
+        return this.snapshot();
+    }
+
+    aiProfileSnapshot() {
+        return {
+            agentId: this.agentId,
+            toolsBaseUrl: this.toolsBaseUrl,
+            dynamicTools: this.dynamicTools,
+            realtime: this.realtime,
+            tts: this.tts,
+            handoffContext: this.handoffContext,
+            initialGreeting: this.initialGreeting,
+            initialGreetingPlaybackStarted: this.initialGreetingPlaybackStarted,
+            initialGreetingPlaybackPreparing: this.initialGreetingPlaybackPreparing,
+            initialGreetingPending: this.initialGreetingPending,
+            initialGreetingPlayed: this.initialGreetingPlayed,
+            realtimeSocket: this.realtimeSocket,
+            realtimeReady: this.realtimeReady,
+        };
+    }
+
+    applyAiProfile(payload) {
+        this.agentId = payload.agent_id || null;
+        this.toolsBaseUrl = payload.tools_base_url || this.toolsBaseUrl;
+        this.dynamicTools = normalizeDynamicTools(payload.dynamic_tools);
+        this.realtime = payload.realtime || {};
+        this.tts = normalizeTtsConfig(payload.tts);
+        this.handoffContext = normalizeHandoffText(payload.handoff_context);
+        this.initialGreeting = normalizeInitialGreeting(payload.handoff_greeting);
+        this.initialGreetingPlaybackStarted = false;
+        this.initialGreetingPlaybackPreparing = false;
+        this.initialGreetingPending = Boolean(this.initialGreeting);
+        this.initialGreetingPlayed = false;
+        this.realtimeSocket = null;
+        this.realtimeReady = false;
+    }
+
+    restoreAiProfile(previous) {
+        this.agentId = previous.agentId;
+        this.toolsBaseUrl = previous.toolsBaseUrl;
+        this.dynamicTools = previous.dynamicTools;
+        this.realtime = previous.realtime;
+        this.tts = previous.tts;
+        this.handoffContext = previous.handoffContext;
+        this.initialGreeting = previous.initialGreeting;
+        this.initialGreetingPlaybackStarted = previous.initialGreetingPlaybackStarted;
+        this.initialGreetingPlaybackPreparing = previous.initialGreetingPlaybackPreparing;
+        this.initialGreetingPending = previous.initialGreetingPending;
+        this.initialGreetingPlayed = previous.initialGreetingPlayed;
+        this.realtimeSocket = previous.realtimeSocket;
+        this.realtimeReady = previous.realtimeReady;
     }
 
     sessionConfig() {
@@ -1433,7 +1594,11 @@ class RealtimeCallSession {
             ? `\n\nHerramientas dinamicas del agente:\n- Tienes disponibles estas tools configuradas en EVA: ${dynamicToolNames}.\n- Usalas solo cuando la intencion del cliente coincida con la descripcion de la tool.\n- Si falta un campo requerido, pide solo ese dato y luego ejecuta la tool.\n- No digas que no puedes usar una capacidad si existe una tool dinamica adecuada.`
             : "";
 
-        return `${base}${dynamicToolsInstructions}
+        const handoffInstructions = this.handoffContext
+            ? `\n\nContexto de transferencia de esta llamada:\n${this.handoffContext}\n- La llamada ya estaba siendo atendida. Continua desde este punto.\n- No vuelvas a pedir datos que el contexto indique como confirmados.\n- Si necesitas verificar algo ambiguo, pregunta solo por ese dato.`
+            : "";
+
+        return `${base}${dynamicToolsInstructions}${handoffInstructions}
 
 Transferencia a humano:
 - Si el cliente pide hablar con una persona, asesor, soporte, recepcion o agente humano, usa la herramienta transfer_to_human con trigger "customer_request".
@@ -1713,6 +1878,13 @@ function normalizeInitialGreeting(value) {
     }
 
     return value.replace(/\s+/g, " ").trim();
+}
+
+function normalizeHandoffText(value) {
+    return String(value || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 4000);
 }
 
 function wait(ms) {

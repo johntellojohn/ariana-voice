@@ -3,6 +3,7 @@ const crypto = require("crypto");
 const CallSession = require("./call-session");
 const RealtimeCallSession = require("./realtime-call-session");
 const OutboundRealtimeCallSession = require("./outbound-realtime-call-session");
+const OutboundHumanBridgeCallSession = require("./outbound-human-bridge-call-session");
 const HumanBridgeCallSession = require("./human-bridge-call-session");
 
 const sessions = new Map();
@@ -117,7 +118,8 @@ async function createOutboundSession(payload, options = {}) {
     }
 
     const sessionId = crypto.randomUUID();
-    const session = new OutboundRealtimeCallSession(payload, {
+    const OutboundSessionClass = selectOutboundSessionClass(payload);
+    const session = new OutboundSessionClass(payload, {
         sessionId,
         baseUrl: options.baseUrl,
         onClosed: removeSession,
@@ -236,6 +238,14 @@ function selectSessionClass(payload) {
     return CallSession;
 }
 
+function selectOutboundSessionClass(payload) {
+    if (payload && payload.mode === "human_bridge") {
+        return OutboundHumanBridgeCallSession;
+    }
+
+    return OutboundRealtimeCallSession;
+}
+
 module.exports = {
     createSession,
     createOutboundSession,
@@ -247,4 +257,5 @@ module.exports = {
     closeSession,
     listSessions,
     _selectSessionClassForTest: selectSessionClass,
+    _selectOutboundSessionClassForTest: selectOutboundSessionClass,
 };

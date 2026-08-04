@@ -3,11 +3,13 @@ const fsp = require("fs/promises");
 const path = require("path");
 const axios = require("axios");
 
+const { execFile } = require("child_process");
+
 const env = require("../../config/env");
 const sttService = require("../stt/stt.service");
 const { createWavBuffer, int16ArrayToBuffer } = require("./wav.util");
 
-const SAMPLE_RATE = 48000;
+const SAMPLE_RATE = Number(env.callRecordingSampleRate || 16000);
 const BYTES_PER_SAMPLE = 2;
 const TRANSCRIPTION_FRAME_MS = 30;
 const TRANSCRIPTION_MIN_SPEECH_MS = 240;
@@ -242,14 +244,33 @@ class CallRecording {
         const customerPcm = await fsp.readFile(this.sources.customer.rawPath);
         const agentPcm = await fsp.readFile(this.sources.agent.rawPath);
         const mixedPcm = mixMono(customerPcm, agentPcm);
-        const filename = `recording-${this.safeSessionId}.wav`;
-        const filePath = path.join(env.ttsOutputDir, filename);
+        let filename = `recording-${this.safeSessionId}.wav`;
+        let filePath = path.join(env.ttsOutputDir, filename);
+        let mimeType = "audio/wav";
         const wav = createWavBuffer(mixedPcm, {
             sampleRate: SAMPLE_RATE,
             channelCount: 1,
         });
 
         await fsp.writeFile(filePath, wav);
+
+        let finalSizeBytes = wav.length;
+        const mp3Filename = `recording-${this.safeSessionId}.mp3`;
+        const mp3Path = path.join(env.ttsOutputDir, mp3Filename);
+        const encodedMp3 = await encodeMp3IfAvailable(filePath, mp3Path);
+
+        if (encodedMp3) {
+            try {
+                const mp3Stat = await fsp.stat(mp3Path);
+                await fsp.unlink(filePath).catch(() => {});
+                filePath = mp3Path;
+                filename = mp3Filename;
+                mimeType = "audio/mpeg";
+                finalSizeBytes = mp3Stat.size;
+            } catch (err) {
+                // Keep WAV fallback if stat or unlink fails
+            }
+        }
 
         const transcriptSegments = await this.resolveTranscriptSegments(customerPcm, agentPcm);
         const durationSeconds = Math.round(maxSamples / SAMPLE_RATE);
@@ -260,8 +281,8 @@ class CallRecording {
             filePath,
             filename,
             audioUrl: this.buildAudioUrl(filename),
-            mimeType: "audio/wav",
-            sizeBytes: wav.length,
+            mimeType,
+            sizeBytes: finalSizeBytes,
             durationSeconds,
             startedAt: this.startedAt.toISOString(),
             endedAt: this.closedAt.toISOString(),
@@ -701,6 +722,42 @@ function safeName(value) {
 
 function clampInt16(value) {
     return Math.max(-32768, Math.min(32767, value));
+}
+
+function encodeMp3IfAvailable(wavPath, mp3Path) {
+    if (!env.callRecordingEncodeMp3) {
+        return Promise.resolve(false);
+    }
+
+    return new Promise((resolve) => {
+        execFile(
+            "ffmpeg",
+            [
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                wavPath,
+                "-codec:a",
+                "libmp3lame",
+                "-b:a",
+                "64k",
+                "-ar",
+                String(SAMPLE_RATE),
+                "-ac",
+                "1",
+                mp3Path,
+            ],
+            (error) => {
+                if (error) {
+                    return resolve(false);
+                }
+
+                return resolve(true);
+            }
+        );
+    });
 }
 
 module.exports = {

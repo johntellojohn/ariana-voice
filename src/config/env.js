@@ -80,6 +80,8 @@ const env = {
     callInitialPlaybackPrerollMs: toNumber(process.env.CALL_INITIAL_PLAYBACK_PREROLL_MS, 700),
     callRecordingEnabled: toBoolean(process.env.CALL_RECORDING_ENABLED, true),
     callRecordingTranscribe: toBoolean(process.env.CALL_RECORDING_TRANSCRIBE, true),
+    callRecordingSampleRate: toNumber(process.env.CALL_RECORDING_SAMPLE_RATE, 16000),
+    callRecordingEncodeMp3: toBoolean(process.env.CALL_RECORDING_ENCODE_MP3, true),
     humanBridgeWaitToneIntervalMs: toNumber(process.env.HUMAN_BRIDGE_WAIT_TONE_INTERVAL_MS, 4500),
     realtimeConnectTimeoutMs: toNumber(process.env.REALTIME_CONNECT_TIMEOUT_MS, 10000),
     realtimeToolTimeoutMs: toNumber(process.env.REALTIME_TOOL_TIMEOUT_MS, 12000),

@@ -53,7 +53,7 @@ Para publicar en el puerto `328`, crea el `.env` del servidor basado en
 NODE_ENV=production
 PORT=3001
 HOST_PORT=328
-PUBLIC_BASE_URL=http://TU_IP_O_DOMINIO:328
+PUBLIC_BASE_URL=https://TU_IP_O_DOMINIO:328
 OPENAI_API_KEY=tu_api_key_de_openai
 VOICE_API_TOKEN=un_token_largo_y_privado
 NORMALIZE_MP3_WITH_FFMPEG=true
@@ -69,7 +69,7 @@ docker compose logs -f api
 Prueba:
 
 ```http
-GET http://TU_IP_O_DOMINIO:328/api/health
+GET https://TU_IP_O_DOMINIO:328/api/health
 ```
 
 Si Laravel no corre dentro del mismo contenedor, no uses `LARAVEL_API_URL=http://localhost`

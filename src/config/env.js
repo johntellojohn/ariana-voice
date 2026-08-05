@@ -1,6 +1,9 @@
 require("dotenv").config();
 
 const path = require("path");
+const { normalizePublicBaseUrl } = require("../utils/public-url");
+
+const nodeEnv = process.env.NODE_ENV || "development";
 
 function toNumber(value, fallback) {
     const parsed = Number(value);
@@ -28,7 +31,7 @@ function toBoolean(value, fallback = false) {
 }
 
 const env = {
-    nodeEnv: process.env.NODE_ENV || "development",
+    nodeEnv,
     port: toNumber(process.env.PORT, 3001),
     appName: process.env.APP_NAME || "Ariana Voice Gateway",
 
@@ -47,7 +50,7 @@ const env = {
 
     voiceApiToken: process.env.VOICE_API_TOKEN || "",
     corsOrigins: toList(process.env.CORS_ORIGINS, ["*"]),
-    publicBaseUrl: process.env.PUBLIC_BASE_URL || "",
+    publicBaseUrl: normalizePublicBaseUrl(process.env.PUBLIC_BASE_URL, nodeEnv),
 
     maxAudioUploadMb: toNumber(process.env.MAX_AUDIO_UPLOAD_MB, 25),
     tmpDir: process.env.TMP_DIR || path.join(process.cwd(), "tmp"),

@@ -1,12 +1,13 @@
 const callSessionManager = require("./call-session.manager");
 const env = require("../../config/env");
+const { normalizePublicBaseUrl } = require("../../utils/public-url");
 
 function getBaseUrl(req) {
     if (env.publicBaseUrl) {
         return env.publicBaseUrl;
     }
 
-    return `${req.protocol}://${req.get("host")}`;
+    return normalizePublicBaseUrl(`${req.protocol}://${req.get("host")}`, env.nodeEnv);
 }
 
 async function createSession(req, res, next) {

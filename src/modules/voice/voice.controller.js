@@ -2,6 +2,7 @@ const sttService = require("../stt/stt.service");
 const ttsService = require("../tts/tts.service");
 const laravelService = require("../laravel/laravel.service");
 const env = require("../../config/env");
+const { normalizePublicBaseUrl } = require("../../utils/public-url");
 const {
     INPUT_AUDIO_EXTENSIONS,
     STT_MODELS,
@@ -15,7 +16,7 @@ function getBaseUrl(req) {
         return env.publicBaseUrl;
     }
 
-    return `${req.protocol}://${req.get("host")}`;
+    return normalizePublicBaseUrl(`${req.protocol}://${req.get("host")}`, env.nodeEnv);
 }
 
 async function processTurn(req, res, next) {

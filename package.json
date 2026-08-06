@@ -11,6 +11,7 @@
     "test:realtime-interruptions": "node scripts/test-realtime-interruptions.js",
     "test:realtime-tool-intents": "node scripts/test-realtime-tool-intents.js",
     "test:outbound-human-bridge": "node scripts/test-outbound-human-bridge.js",
+    "test:human-bridge-lifecycle": "node scripts/test-human-bridge-lifecycle.js",
     "test:human-to-ai-transfer": "node scripts/test-human-to-ai-transfer.js",
     "docker:up": "docker compose up -d --build",
     "docker:down": "docker compose down",

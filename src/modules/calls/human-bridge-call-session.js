@@ -1,4 +1,5 @@
 const wrtc = require("@roamhq/wrtc");
+const axios = require("axios");
 
 const env = require("../../config/env");
 const ttsService = require("../tts/tts.service");
@@ -60,6 +61,7 @@ class HumanBridgeCallSession {
         this.waitToneTimer = null;
         this.lastActivityAt = Date.now();
         this.lastActivityType = "created";
+        this.metaDisconnectTimer = null;
     }
 
     async start() {
@@ -617,6 +619,7 @@ class HumanBridgeCallSession {
 
         this.closedAt = new Date();
         this.status = "closed";
+        this.clearMetaDisconnectClose();
         this.stopWaitingPlayback(reason);
 
         await this.closeAgentPeer(reason);
@@ -654,7 +657,26 @@ class HumanBridgeCallSession {
             agent_ws_frames_received: this.agentWsFramesReceived,
         });
 
-        await this.recording.finalize(reason);
+        const endedCallback = this.shouldNotifyEnded(reason)
+            ? this.sendCallback({
+                event: "ended",
+                session_id: this.sessionId,
+                call_id: this.callId,
+                reason,
+                tenant: this.tenant,
+                agent_id: this.agentId,
+            }).catch((error) => {
+                this.log("human bridge ended callback failed", {
+                    reason,
+                    error: error.message,
+                });
+            })
+            : Promise.resolve();
+
+        await Promise.all([
+            this.recording.finalize(reason),
+            endedCallback,
+        ]);
 
         if (typeof this.onClosed === "function") {
             this.onClosed(this);
@@ -665,6 +687,7 @@ class HumanBridgeCallSession {
         this.log("human bridge peer state", { peer, state });
 
         if (peer === "meta" && ["connected", "completed"].includes(state)) {
+            this.clearMetaDisconnectClose();
             this.startWaitingPlayback(`meta_peer_${state}`).catch((error) => {
                 this.log("human bridge waiting playback failed", {
                     reason: `meta_peer_${state}`,
@@ -673,7 +696,12 @@ class HumanBridgeCallSession {
             });
         }
 
+        if (peer === "meta" && state === "disconnected" && !this.closedAt) {
+            this.scheduleMetaDisconnectClose("peer");
+        }
+
         if (["failed", "closed"].includes(state) && peer === "meta" && !this.closedAt) {
+            this.clearMetaDisconnectClose();
             this.close(`${peer}_peer_${state}`).catch((error) => {
                 console.error("Error closing human bridge after peer state", error);
             });
@@ -684,6 +712,7 @@ class HumanBridgeCallSession {
         this.log("human bridge ice state", { peer, state });
 
         if (peer === "meta" && ["connected", "completed"].includes(state)) {
+            this.clearMetaDisconnectClose();
             this.startWaitingPlayback(`meta_ice_${state}`).catch((error) => {
                 this.log("human bridge waiting playback failed", {
                     reason: `meta_ice_${state}`,
@@ -692,11 +721,76 @@ class HumanBridgeCallSession {
             });
         }
 
+        if (peer === "meta" && state === "disconnected" && !this.closedAt) {
+            this.scheduleMetaDisconnectClose("ice");
+        }
+
         if (["failed", "closed"].includes(state) && peer === "meta" && !this.closedAt) {
+            this.clearMetaDisconnectClose();
             this.close(`${peer}_ice_${state}`).catch((error) => {
                 console.error("Error closing human bridge after ice state", error);
             });
         }
+    }
+
+    scheduleMetaDisconnectClose(source) {
+        if (this.metaDisconnectTimer || this.closedAt) {
+            return;
+        }
+
+        const graceMs = Math.max(250, env.callDisconnectGraceMs);
+        this.log("human bridge meta disconnect grace started", {
+            source,
+            grace_ms: graceMs,
+        });
+
+        this.metaDisconnectTimer = setTimeout(() => {
+            this.metaDisconnectTimer = null;
+
+            if (this.closedAt) {
+                return;
+            }
+
+            this.close(`meta_${source}_disconnected_timeout`).catch((error) => {
+                console.error("Error closing human bridge after disconnect grace", error);
+            });
+        }, graceMs);
+
+        if (this.metaDisconnectTimer.unref) {
+            this.metaDisconnectTimer.unref();
+        }
+    }
+
+    clearMetaDisconnectClose() {
+        if (!this.metaDisconnectTimer) {
+            return;
+        }
+
+        clearTimeout(this.metaDisconnectTimer);
+        this.metaDisconnectTimer = null;
+    }
+
+    shouldNotifyEnded(reason) {
+        return !["meta_ended", "meta_rejected", "meta_failed"].includes(String(reason || "").toLowerCase());
+    }
+
+    async sendCallback(payload) {
+        if (!this.callbackUrl) {
+            return null;
+        }
+
+        const response = await axios.post(this.callbackUrl, payload, {
+            headers: {
+                Accept: "application/json",
+                "Content-Type": "application/json",
+                Authorization: env.voiceApiToken
+                    ? `Bearer ${env.voiceApiToken}`
+                    : undefined,
+            },
+            timeout: env.callCallbackTimeoutMs,
+        });
+
+        return response.data;
     }
 
     waitForMetaPlaybackReady() {

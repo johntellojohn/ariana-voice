@@ -56,18 +56,40 @@ async function testDisconnectedUsesGraceAndCanRecover() {
             disconnected.clearMetaDisconnectClose();
         };
 
+        disconnected.handleIceState("meta", "connected");
+        disconnected.handlePeerState("meta", "disconnected");
         disconnected.handleIceState("meta", "disconnected");
         assert.deepStrictEqual(closeReasons, []);
         await wait(300);
-        assert.deepStrictEqual(closeReasons, ["meta_ice_disconnected_timeout"]);
+        assert.deepStrictEqual(closeReasons, ["meta_peer_disconnected_timeout"]);
 
         const recovered = createSession("disconnect-recovered");
         const recoveredCloseReasons = [];
         recovered.close = async (reason) => recoveredCloseReasons.push(reason);
+        recovered.handleIceState("meta", "connected");
+        recovered.handleIceState("meta", "disconnected");
         recovered.handlePeerState("meta", "disconnected");
-        recovered.handlePeerState("meta", "connected");
+        recovered.handleIceState("meta", "checking");
         await wait(300);
         assert.deepStrictEqual(recoveredCloseReasons, []);
+
+        const reconnected = createSession("disconnect-reconnected");
+        const reconnectedCloseReasons = [];
+        reconnected.close = async (reason) => reconnectedCloseReasons.push(reason);
+        reconnected.handleIceState("meta", "connected");
+        reconnected.handlePeerState("meta", "disconnected");
+        reconnected.handleIceState("meta", "disconnected");
+        reconnected.handlePeerState("meta", "connected");
+        await wait(300);
+        assert.deepStrictEqual(reconnectedCloseReasons, []);
+
+        const notConnected = createSession("disconnect-before-connect");
+        const notConnectedCloseReasons = [];
+        notConnected.close = async (reason) => notConnectedCloseReasons.push(reason);
+        notConnected.handlePeerState("meta", "disconnected");
+        notConnected.handleIceState("meta", "disconnected");
+        await wait(300);
+        assert.deepStrictEqual(notConnectedCloseReasons, []);
     } finally {
         env.callDisconnectGraceMs = originalGraceMs;
     }

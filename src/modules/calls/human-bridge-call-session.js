@@ -62,6 +62,9 @@ class HumanBridgeCallSession {
         this.lastActivityAt = Date.now();
         this.lastActivityType = "created";
         this.metaDisconnectTimer = null;
+        this.metaConnectedOnce = false;
+        this.metaPeerState = "new";
+        this.metaIceState = "new";
     }
 
     async start() {
@@ -686,7 +689,12 @@ class HumanBridgeCallSession {
     handlePeerState(peer, state) {
         this.log("human bridge peer state", { peer, state });
 
+        if (peer === "meta") {
+            this.metaPeerState = state;
+        }
+
         if (peer === "meta" && ["connected", "completed"].includes(state)) {
+            this.metaConnectedOnce = true;
             this.clearMetaDisconnectClose();
             this.startWaitingPlayback(`meta_peer_${state}`).catch((error) => {
                 this.log("human bridge waiting playback failed", {
@@ -711,7 +719,12 @@ class HumanBridgeCallSession {
     handleIceState(peer, state) {
         this.log("human bridge ice state", { peer, state });
 
+        if (peer === "meta") {
+            this.metaIceState = state;
+        }
+
         if (peer === "meta" && ["connected", "completed"].includes(state)) {
+            this.metaConnectedOnce = true;
             this.clearMetaDisconnectClose();
             this.startWaitingPlayback(`meta_ice_${state}`).catch((error) => {
                 this.log("human bridge waiting playback failed", {
@@ -738,6 +751,15 @@ class HumanBridgeCallSession {
             return;
         }
 
+        if (!this.metaConnectedOnce) {
+            this.log("human bridge meta disconnect ignored before first connection", {
+                source,
+                peer_state: this.currentMetaPeerState(),
+                ice_state: this.currentMetaIceState(),
+            });
+            return;
+        }
+
         const graceMs = Math.max(250, env.callDisconnectGraceMs);
         this.log("human bridge meta disconnect grace started", {
             source,
@@ -748,6 +770,15 @@ class HumanBridgeCallSession {
             this.metaDisconnectTimer = null;
 
             if (this.closedAt) {
+                return;
+            }
+
+            if (!this.isMetaStillDisconnected()) {
+                this.log("human bridge meta disconnect recovered during grace", {
+                    source,
+                    peer_state: this.currentMetaPeerState(),
+                    ice_state: this.currentMetaIceState(),
+                });
                 return;
             }
 
@@ -768,6 +799,29 @@ class HumanBridgeCallSession {
 
         clearTimeout(this.metaDisconnectTimer);
         this.metaDisconnectTimer = null;
+    }
+
+    currentMetaPeerState() {
+        return this.metaPc ? this.metaPc.connectionState : this.metaPeerState;
+    }
+
+    currentMetaIceState() {
+        return this.metaPc ? this.metaPc.iceConnectionState : this.metaIceState;
+    }
+
+    isMetaStillDisconnected() {
+        const peerState = this.currentMetaPeerState();
+        const iceState = this.currentMetaIceState();
+
+        if (["connected", "completed"].includes(peerState) || ["connected", "completed"].includes(iceState)) {
+            return false;
+        }
+
+        if (["new", "connecting"].includes(peerState) || ["new", "checking"].includes(iceState)) {
+            return false;
+        }
+
+        return peerState === "disconnected" || iceState === "disconnected";
     }
 
     shouldNotifyEnded(reason) {

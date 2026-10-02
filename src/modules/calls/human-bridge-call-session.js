@@ -32,6 +32,7 @@ class HumanBridgeCallSession {
             logger: (message, data) => this.log(message, data),
         });
         this.waitMessage = normalizeWaitMessage(payload.wait_message);
+        this.waitAudioUrl = payload.wait_audio_url ? String(payload.wait_audio_url).trim() : "";
         this.waitToneEnabled = payload.wait_tone_enabled !== false;
         this.waitPosition = Number(payload.wait_position || 0) || 0;
         this.tts = normalizeTtsConfig(payload.tts);
@@ -204,7 +205,16 @@ class HumanBridgeCallSession {
                 wait_position: this.waitPosition,
             });
 
-            if (this.waitMessage) {
+            if (this.waitAudioUrl) {
+                try {
+                    await this.playWaitAudio(reason);
+                } catch (error) {
+                    this.log("human bridge wait audio playback failed", {
+                        reason,
+                        error: error.message,
+                    });
+                }
+            } else if (this.waitMessage) {
                 try {
                     await this.playWaitMessage(reason);
                 } catch (error) {
@@ -223,6 +233,25 @@ class HumanBridgeCallSession {
         } finally {
             this.waitPlaybackPreparing = false;
         }
+    }
+
+    async playWaitAudio(reason) {
+        if (!this.waitAudioUrl || !this.metaAudioOutput) {
+            return;
+        }
+
+        const playback = await this.metaAudioOutput.enqueueAudioUrl(this.waitAudioUrl, {
+            source: "human_bridge_wait_audio",
+            reason,
+        });
+
+        this.markActivity("waiting_audio_played");
+        this.log("human bridge waiting audio playback complete", {
+            audio_url: this.waitAudioUrl,
+            frames_sent: playback.framesSent,
+            frames_queued: playback.framesQueued,
+            stopped: playback.stopped,
+        });
     }
 
     async playWaitMessage(reason) {

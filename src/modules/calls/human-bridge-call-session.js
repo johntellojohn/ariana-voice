@@ -333,6 +333,11 @@ class HumanBridgeCallSession {
     }
 
     stopWaitingPlayback(reason = "waiting_stopped") {
+        if (this.waitingPlaybackStopped) {
+            return;
+        }
+        this.waitingPlaybackStopped = true;
+
         if (this.waitToneTimer) {
             clearInterval(this.waitToneTimer);
             this.waitToneTimer = null;

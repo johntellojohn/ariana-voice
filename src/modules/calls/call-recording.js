@@ -402,6 +402,11 @@ class CallRecording {
                     segment: index + 1,
                     error: error.message,
                 });
+                if (error.status === 401 || String(error.message || "").includes("401") || String(error.message || "").includes("API key")) {
+                    this.log("aborting remaining segment transcriptions due to API key / authentication error", { source });
+                    await fsp.unlink(filePath).catch(() => {});
+                    break;
+                }
             } finally {
                 await fsp.unlink(filePath).catch(() => {});
             }

@@ -272,7 +272,20 @@ class CallRecording {
             }
         }
 
-        const transcriptSegments = await this.resolveTranscriptSegments(customerPcm, agentPcm);
+        let transcriptSegments = [];
+        if (env.callRecordingTranscribe && env.openaiApiKey) {
+            try {
+                transcriptSegments = await Promise.race([
+                    this.resolveTranscriptSegments(customerPcm, agentPcm),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error("STT timeout")), 1000))
+                ]);
+            } catch (err) {
+                this.log("transcript resolution skipped or timed out", { error: err.message });
+                transcriptSegments = sortTranscriptSegments(this.transcriptSegments);
+            }
+        } else {
+            transcriptSegments = sortTranscriptSegments(this.transcriptSegments);
+        }
         const durationSeconds = Math.round(maxSamples / SAMPLE_RATE);
 
         await this.cleanupRawFiles();

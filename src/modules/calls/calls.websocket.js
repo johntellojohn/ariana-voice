@@ -7,14 +7,30 @@ function attachCallWebSocketServer(server) {
 
     server.on("upgrade", (request, socket, head) => {
         const url = new URL(request.url || "", "http://localhost");
-        const match = url.pathname.match(/^\/api\/voice\/calls\/([^/]+)\/agent-ws$/);
+        const match = url.pathname.match(/^\/api\/voice\/calls\/([^/]+)\/(agent-ws|mobile-ws)$/);
 
         if (!match) {
             return;
         }
 
         const sessionId = decodeURIComponent(match[1]);
+        const endpointType = match[2];
         const session = callSessionManager.getSession(sessionId);
+
+        if (endpointType === "mobile-ws") {
+            if (!session || typeof session.attachMobileWebSocket !== "function") {
+                socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+                socket.destroy();
+                return;
+            }
+
+            wss.handleUpgrade(request, socket, head, (ws) => {
+                session.attachMobileWebSocket(ws, {
+                    agentId: url.searchParams.get("agent_id") || null,
+                });
+            });
+            return;
+        }
 
         if (!session || typeof session.attachAgentWebSocket !== "function") {
             socket.write("HTTP/1.1 404 Not Found\r\n\r\n");

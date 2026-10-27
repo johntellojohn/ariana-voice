@@ -5,6 +5,9 @@ const { CallRecording } = require("./call-recording");
 
 const { RTCAudioSink, RTCAudioSource } = wrtc.nonstandard;
 const RTC_AUDIO_FRAME_SAMPLES = 480;
+const SILENCE_FRAME_SAMPLES_20MS = 960;
+const SILENCE_INTERVAL_MS = 20;
+const RECONNECT_GRACE_PERIOD_MS = 15000;
 
 class MobileBridgeCallSession {
     constructor(payload, options = {}) {
@@ -43,6 +46,11 @@ class MobileBridgeCallSession {
         this.mobileWsFramesReceived = 0;
         this.mobileWsSampleRemainder = null;
         this.activeAgentId = null;
+
+        this.keepAliveSilenceTimer = null;
+        this.reconnectGraceTimer = null;
+        this.silenceFrame = new Int16Array(SILENCE_FRAME_SAMPLES_20MS);
+        this.keepAliveSilenceFramesSent = 0;
 
         this.lastActivityAt = Date.now();
         this.lastActivityType = "created";
@@ -142,6 +150,10 @@ class MobileBridgeCallSession {
             return;
         }
 
+        // Cancel any pending reconnection grace period and silence keep-alive
+        this.stopReconnectGracePeriod();
+        this.stopKeepAliveSilence();
+
         if (this.mobileWs && this.mobileWs.readyState === 1) {
             this.mobileWs.close(1000, "mobile_replaced");
         }
@@ -189,7 +201,8 @@ class MobileBridgeCallSession {
         });
 
         ws.on("close", (code, reason) => {
-            if (this.mobileWs === ws) {
+            const wasActive = this.mobileWs === ws;
+            if (wasActive) {
                 this.mobileWs = null;
             }
 
@@ -198,7 +211,13 @@ class MobileBridgeCallSession {
                 agent_id: this.activeAgentId,
                 code,
                 reason: reason ? reason.toString() : "",
+                was_active: wasActive,
             });
+
+            if (wasActive && !this.closedAt) {
+                this.startKeepAliveSilence();
+                this.startReconnectGracePeriod();
+            }
         });
 
         ws.on("error", (error) => {
@@ -207,6 +226,86 @@ class MobileBridgeCallSession {
                 error: error.message,
             });
         });
+    }
+
+    startKeepAliveSilence() {
+        if (this.keepAliveSilenceTimer || this.closedAt) {
+            return;
+        }
+
+        this.status = "waiting_mobile_reconnect";
+        this.keepAliveSilenceFramesSent = 0;
+        this.log("starting keep-alive silence for mobile disconnection", {
+            interval_ms: SILENCE_INTERVAL_MS,
+            samples_per_frame: SILENCE_FRAME_SAMPLES_20MS,
+        });
+
+        this.keepAliveSilenceTimer = setInterval(() => {
+            if (this.closedAt || !this.metaAudioSource) {
+                this.stopKeepAliveSilence();
+                return;
+            }
+
+            try {
+                this.metaAudioSource.onData({
+                    samples: this.silenceFrame,
+                    sampleRate: 48000,
+                    bitsPerSample: 16,
+                    channelCount: 1,
+                    numberOfFrames: SILENCE_FRAME_SAMPLES_20MS,
+                });
+
+                this.keepAliveSilenceFramesSent += 1;
+
+                if (this.keepAliveSilenceFramesSent === 1 || this.keepAliveSilenceFramesSent % 250 === 0) {
+                    this.log("keep-alive silence sent to Meta", {
+                        frames_sent: this.keepAliveSilenceFramesSent,
+                    });
+                }
+            } catch (error) {
+                this.log("keep-alive silence error sending to Meta", {
+                    error: error.message,
+                });
+            }
+        }, SILENCE_INTERVAL_MS);
+    }
+
+    stopKeepAliveSilence() {
+        if (this.keepAliveSilenceTimer) {
+            clearInterval(this.keepAliveSilenceTimer);
+            this.keepAliveSilenceTimer = null;
+            this.log("stopped keep-alive silence", {
+                total_frames_sent: this.keepAliveSilenceFramesSent,
+            });
+        }
+    }
+
+    startReconnectGracePeriod() {
+        this.stopReconnectGracePeriod();
+
+        this.log("started mobile reconnection grace period", {
+            grace_period_ms: RECONNECT_GRACE_PERIOD_MS,
+        });
+
+        this.reconnectGraceTimer = setTimeout(() => {
+            this.reconnectGraceTimer = null;
+            if (!this.mobileWs && !this.closedAt) {
+                this.log("mobile reconnection grace period expired; closing call session", {
+                    grace_period_ms: RECONNECT_GRACE_PERIOD_MS,
+                });
+                this.close("mobile_reconnect_timeout").catch((error) => {
+                    console.error("Error closing mobile bridge session after reconnect timeout", error);
+                });
+            }
+        }, RECONNECT_GRACE_PERIOD_MS);
+    }
+
+    stopReconnectGracePeriod() {
+        if (this.reconnectGraceTimer) {
+            clearTimeout(this.reconnectGraceTimer);
+            this.reconnectGraceTimer = null;
+            this.log("stopped mobile reconnection grace period");
+        }
     }
 
     sendMetaAudioToMobileWebSocket(data) {
@@ -317,6 +416,9 @@ class MobileBridgeCallSession {
         this.closedAt = new Date();
         this.status = "closed";
 
+        this.stopReconnectGracePeriod();
+        this.stopKeepAliveSilence();
+
         if (this.mobileWs && this.mobileWs.readyState === 1) {
             this.mobileWs.close(1000, reason);
         }
@@ -383,6 +485,8 @@ class MobileBridgeCallSession {
             mobile_ws_frames_received: this.mobileWsFramesReceived,
             has_meta_peer: Boolean(this.metaPc),
             has_mobile_ws: Boolean(this.mobileWs),
+            keep_alive_silence_active: Boolean(this.keepAliveSilenceTimer),
+            reconnect_grace_active: Boolean(this.reconnectGraceTimer),
             callback_url: this.callbackUrl,
         };
     }

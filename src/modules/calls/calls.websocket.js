@@ -18,14 +18,16 @@ function attachCallWebSocketServer(server) {
         const session = callSessionManager.getSession(sessionId);
 
         if (endpointType === "mobile-ws") {
-            if (!session || typeof session.attachMobileWebSocket !== "function") {
+            const attachMethod = session?.attachMobileWebSocket || session?.attachAgentWebSocket;
+
+            if (!session || typeof attachMethod !== "function") {
                 socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
                 socket.destroy();
                 return;
             }
 
             wss.handleUpgrade(request, socket, head, (ws) => {
-                session.attachMobileWebSocket(ws, {
+                attachMethod.call(session, ws, {
                     agentId: url.searchParams.get("agent_id") || null,
                 });
             });

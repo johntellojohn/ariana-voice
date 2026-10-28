@@ -4,6 +4,7 @@ const CallSession = require("./call-session");
 const RealtimeCallSession = require("./realtime-call-session");
 const OutboundRealtimeCallSession = require("./outbound-realtime-call-session");
 const OutboundHumanBridgeCallSession = require("./outbound-human-bridge-call-session");
+const OutboundMobileBridgeCallSession = require("./outbound-mobile-bridge-call-session");
 const HumanBridgeCallSession = require("./human-bridge-call-session");
 const MobileBridgeCallSession = require("./mobile-bridge-call-session");
 
@@ -244,6 +245,10 @@ function selectSessionClass(payload) {
 }
 
 function selectOutboundSessionClass(payload) {
+    if (payload && payload.mode === "mobile_bridge") {
+        return OutboundMobileBridgeCallSession;
+    }
+
     if (payload && payload.mode === "human_bridge") {
         return OutboundHumanBridgeCallSession;
     }

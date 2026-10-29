@@ -5,8 +5,8 @@ const { CallRecording } = require("./call-recording");
 
 const { RTCAudioSink, RTCAudioSource } = wrtc.nonstandard;
 const RTC_AUDIO_FRAME_SAMPLES = 480;
-const SILENCE_FRAME_SAMPLES_20MS = 960;
-const SILENCE_INTERVAL_MS = 20;
+const SILENCE_FRAME_SAMPLES = RTC_AUDIO_FRAME_SAMPLES;
+const SILENCE_INTERVAL_MS = 10;
 const RECONNECT_GRACE_PERIOD_MS = 15000;
 
 class MobileBridgeCallSession {
@@ -49,7 +49,7 @@ class MobileBridgeCallSession {
 
         this.keepAliveSilenceTimer = null;
         this.reconnectGraceTimer = null;
-        this.silenceFrame = new Int16Array(SILENCE_FRAME_SAMPLES_20MS);
+        this.silenceFrame = new Int16Array(SILENCE_FRAME_SAMPLES);
         this.keepAliveSilenceFramesSent = 0;
 
         this.lastActivityAt = Date.now();
@@ -237,7 +237,7 @@ class MobileBridgeCallSession {
         this.keepAliveSilenceFramesSent = 0;
         this.log("starting keep-alive silence for mobile disconnection", {
             interval_ms: SILENCE_INTERVAL_MS,
-            samples_per_frame: SILENCE_FRAME_SAMPLES_20MS,
+            samples_per_frame: SILENCE_FRAME_SAMPLES,
         });
 
         this.keepAliveSilenceTimer = setInterval(() => {
@@ -252,7 +252,7 @@ class MobileBridgeCallSession {
                     sampleRate: 48000,
                     bitsPerSample: 16,
                     channelCount: 1,
-                    numberOfFrames: SILENCE_FRAME_SAMPLES_20MS,
+                    numberOfFrames: SILENCE_FRAME_SAMPLES,
                 });
 
                 this.keepAliveSilenceFramesSent += 1;

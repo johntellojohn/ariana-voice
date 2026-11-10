@@ -197,7 +197,19 @@ async function removeFile(filePath) {
     await fsp.unlink(filePath).catch(() => {});
 }
 
+let sttAuthCooldownUntil = 0;
+
 async function transcribe({ file, rawAudio, body = {}, cleanup = true }) {
+    if (Date.now() < sttAuthCooldownUntil) {
+        if (cleanup && file && file.path) {
+            await removeFile(file.path);
+        }
+        throw httpError(
+            401,
+            "OpenAI STT paused due to invalid API key (401 circuit breaker active)."
+        );
+    }
+
     const audioFile = file || (await fileFromRawAudio(rawAudio)) || (await fileFromBase64(body));
 
     if (!audioFile) {
@@ -244,6 +256,17 @@ async function transcribe({ file, rawAudio, body = {}, cleanup = true }) {
                 size_bytes: audioFile.size,
             },
         };
+    } catch (error) {
+        if (
+            error &&
+            (error.status === 401 ||
+                error.code === "invalid_api_key" ||
+                String(error.message || "").includes("401") ||
+                String(error.message || "").toLowerCase().includes("incorrect api key"))
+        ) {
+            sttAuthCooldownUntil = Date.now() + 5 * 60 * 1000;
+        }
+        throw error;
     } finally {
         if (cleanup) {
             await removeFile(audioFile.path);

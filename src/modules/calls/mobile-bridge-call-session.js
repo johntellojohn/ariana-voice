@@ -454,7 +454,12 @@ class MobileBridgeCallSession {
             mobile_ws_frames_received: this.mobileWsFramesReceived,
         });
 
-        await this.recording.finalize(reason);
+        this.recording.finalize(reason).catch((error) => {
+            this.log("mobile bridge recording finalize failed in background", {
+                reason,
+                error: error.message,
+            });
+        });
 
         if (typeof this.onClosed === "function") {
             this.onClosed(this);

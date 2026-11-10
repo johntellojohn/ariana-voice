@@ -13,6 +13,10 @@ function attachCallWebSocketServer(server) {
             return;
         }
 
+        try {
+            socket.setNoDelay(true);
+        } catch (_) {}
+
         const sessionId = decodeURIComponent(match[1]);
         const endpointType = match[2];
         const session = callSessionManager.getSession(sessionId);

@@ -5,6 +5,8 @@ const router = express.Router();
 
 router.post("/session", callsController.createSession);
 router.post("/outbound-session", callsController.createOutboundSession);
+router.post("/internal-webrtc/session", callsController.createInternalWebRtcSession);
+router.post("/internal-webrtc/:session_id/connect-callee", callsController.connectInternalWebRtcCallee);
 router.get("/sessions", callsController.listSessions);
 router.get("/:session_id", callsController.showSession);
 router.post("/:session_id/answer", callsController.applySessionAnswer);

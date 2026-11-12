@@ -7,6 +7,7 @@ const OutboundHumanBridgeCallSession = require("./outbound-human-bridge-call-ses
 const OutboundMobileBridgeCallSession = require("./outbound-mobile-bridge-call-session");
 const HumanBridgeCallSession = require("./human-bridge-call-session");
 const MobileBridgeCallSession = require("./mobile-bridge-call-session");
+const InternalWebRtcBridgeSession = require("./internal-webrtc-bridge-session");
 
 const sessions = new Map();
 const sessionsByCallId = new Map();
@@ -256,9 +257,72 @@ function selectOutboundSessionClass(payload) {
     return OutboundRealtimeCallSession;
 }
 
+async function createInternalWebRtcSession(payload, options = {}) {
+    const callId = payload.call_id || payload.callId;
+    if (!callId) {
+        const error = new Error("call_id is required");
+        error.status = 422;
+        throw error;
+    }
+
+    const offerSdp = payload.caller_offer_sdp || payload.offer_sdp || payload.sdp;
+    if (!offerSdp) {
+        const error = new Error("caller_offer_sdp is required");
+        error.status = 422;
+        throw error;
+    }
+
+    const existingSessionId = sessionsByCallId.get(callId);
+    if (existingSessionId) {
+        const existingSession = sessions.get(existingSessionId);
+        if (existingSession && !existingSession.closedAt) {
+            const error = new Error("A live session already exists for this call_id");
+            error.status = 409;
+            throw error;
+        }
+    }
+
+    const sessionId = crypto.randomUUID();
+    const session = new InternalWebRtcBridgeSession(payload, {
+        sessionId,
+        baseUrl: options.baseUrl,
+        onClosed: removeSession,
+    });
+
+    const callerAnswerSdp = await session.start();
+
+    sessions.set(sessionId, session);
+    sessionsByCallId.set(callId, sessionId);
+
+    return {
+        session,
+        callerAnswerSdp,
+    };
+}
+
+async function connectInternalWebRtcCallee(sessionId, calleeOfferSdp, options = {}) {
+    const session = getSession(sessionId);
+
+    if (!session) {
+        const error = new Error("Call session not found");
+        error.status = 404;
+        throw error;
+    }
+
+    if (typeof session.connectCallee !== "function") {
+        const error = new Error("Call session does not accept internal callee WebRTC connections");
+        error.status = 409;
+        throw error;
+    }
+
+    return session.connectCallee(calleeOfferSdp, options);
+}
+
 module.exports = {
     createSession,
     createOutboundSession,
+    createInternalWebRtcSession,
+    connectInternalWebRtcCallee,
     applySessionAnswer,
     connectAgent,
     activateAi,

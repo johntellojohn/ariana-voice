@@ -153,9 +153,60 @@ async function activateAi(req, res, next) {
     }
 }
 
+async function createInternalWebRtcSession(req, res, next) {
+    try {
+        const { session, callerAnswerSdp } = await callSessionManager.createInternalWebRtcSession(
+            req.body,
+            {
+                baseUrl: getBaseUrl(req),
+            }
+        );
+
+        res.json({
+            ok: true,
+            session_id: session.sessionId,
+            caller_answer_sdp: callerAnswerSdp,
+            answer_sdp: callerAnswerSdp,
+            data: {
+                session_id: session.sessionId,
+                caller_answer_sdp: callerAnswerSdp,
+                answer_sdp: callerAnswerSdp,
+            },
+        });
+    } catch (error) {
+        next(error);
+    }
+}
+
+async function connectInternalWebRtcCallee(req, res, next) {
+    try {
+        const offerSdp = req.body.callee_offer_sdp || req.body.offer_sdp || req.body.sdp || "";
+        const result = await callSessionManager.connectInternalWebRtcCallee(
+            req.params.session_id,
+            offerSdp,
+            req.body
+        );
+
+        res.json({
+            ok: true,
+            callee_answer_sdp: result.callee_answer_sdp,
+            answer_sdp: result.callee_answer_sdp,
+            data: {
+                callee_answer_sdp: result.callee_answer_sdp,
+                answer_sdp: result.callee_answer_sdp,
+                session: result.snapshot,
+            },
+        });
+    } catch (error) {
+        next(error);
+    }
+}
+
 module.exports = {
     createSession,
     createOutboundSession,
+    createInternalWebRtcSession,
+    connectInternalWebRtcCallee,
     listSessions,
     showSession,
     applySessionAnswer,

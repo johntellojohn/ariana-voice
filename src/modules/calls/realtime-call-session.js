@@ -6,7 +6,7 @@ const env = require("../../config/env");
 const { callTool } = require("../laravel/voice-agent-tools.service");
 const ttsService = require("../tts/tts.service");
 const { AudioOutput } = require("./audio-output");
-const { CallRecording } = require("./call-recording");
+const { CallRecording, resolveTranscribeRecording } = require("./call-recording");
 const { SpeechInterruptionGate } = require("./speech-interruption-gate");
 const { int16ArrayToBuffer } = require("./wav.util");
 const { normalizeTtsConfig, toTtsVoice } = require("./voice-profile");
@@ -37,6 +37,7 @@ class RealtimeCallSession {
             callbackUrl: this.callbackUrl,
             baseUrl: this.baseUrl,
             mode: payload.mode || "realtime",
+            transcribeRecording: resolveTranscribeRecording(payload),
             logger: (message, data) => this.log(message, data),
         });
         this.notificationOnly = Boolean(payload.notification_only);
@@ -263,6 +264,9 @@ class RealtimeCallSession {
         this.status = "ai_preparing";
         this.markActivity("ai_transfer_preparing");
         this.applyAiProfile(payload);
+        if (this.recording) {
+            this.recording.setTranscriptionEnabled(resolveTranscribeRecording(payload));
+        }
 
         try {
             await this.connectRealtime();

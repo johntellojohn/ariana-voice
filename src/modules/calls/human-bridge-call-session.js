@@ -3,7 +3,7 @@ const wrtc = require("@roamhq/wrtc");
 const env = require("../../config/env");
 const ttsService = require("../tts/tts.service");
 const { AudioOutput } = require("./audio-output");
-const { CallRecording } = require("./call-recording");
+const { CallRecording, resolveTranscribeRecording } = require("./call-recording");
 const { normalizeTtsConfig } = require("./voice-profile");
 
 const { RTCAudioSink, RTCAudioSource } = wrtc.nonstandard;
@@ -29,6 +29,7 @@ class HumanBridgeCallSession {
             callbackUrl: this.callbackUrl,
             baseUrl: this.baseUrl,
             mode: payload.mode || "human_bridge",
+            transcribeRecording: resolveTranscribeRecording(payload),
             logger: (message, data) => this.log(message, data),
         });
         this.waitMessage = normalizeWaitMessage(payload.wait_message);

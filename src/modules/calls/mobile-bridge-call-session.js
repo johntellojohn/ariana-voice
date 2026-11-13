@@ -1,7 +1,7 @@
 const wrtc = require("@roamhq/wrtc");
 
 const env = require("../../config/env");
-const { CallRecording } = require("./call-recording");
+const { CallRecording, resolveTranscribeRecording } = require("./call-recording");
 
 const { RTCAudioSink, RTCAudioSource } = wrtc.nonstandard;
 const RTC_AUDIO_FRAME_SAMPLES = 480;
@@ -28,6 +28,7 @@ class MobileBridgeCallSession {
             callbackUrl: this.callbackUrl,
             baseUrl: this.baseUrl,
             mode: payload.mode || "mobile_bridge",
+            transcribeRecording: resolveTranscribeRecording(payload),
             logger: (message, data) => this.log(message, data),
         });
         this.createdAt = new Date();

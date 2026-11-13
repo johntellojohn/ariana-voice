@@ -8,7 +8,7 @@ const sttService = require("../stt/stt.service");
 const ttsService = require("../tts/tts.service");
 const CallVad = require("./call-vad");
 const { AudioOutput } = require("./audio-output");
-const { CallRecording } = require("./call-recording");
+const { CallRecording, resolveTranscribeRecording } = require("./call-recording");
 const { createWavBuffer } = require("./wav.util");
 const { normalizeTtsConfig, toTtsVoice } = require("./voice-profile");
 
@@ -33,6 +33,7 @@ class CallSession {
             callbackUrl: this.callbackUrl,
             baseUrl: this.baseUrl,
             mode: payload.mode || "legacy",
+            transcribeRecording: resolveTranscribeRecording(payload),
             logger: (message, data) => this.log(message, data),
         });
         this.initialGreeting = normalizeInitialGreeting(payload.initial_greeting);

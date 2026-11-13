@@ -27,9 +27,56 @@ const CHANNELS = {
     },
 };
 
+function parseOptionalBoolean(value) {
+    if (typeof value === "boolean") {
+        return value;
+    }
+
+    if (typeof value === "number") {
+        if (value === 1) return true;
+        if (value === 0) return false;
+        return null;
+    }
+
+    if (typeof value === "string") {
+        const normalized = value.trim().toLowerCase();
+
+        if (["true", "1", "yes", "on"].includes(normalized)) {
+            return true;
+        }
+
+        if (["false", "0", "no", "off"].includes(normalized)) {
+            return false;
+        }
+    }
+
+    return null;
+}
+
+function resolveTranscribeRecording(payload) {
+    if (!payload || typeof payload !== "object") {
+        return null;
+    }
+
+    if (payload.transcribe_recording !== undefined) {
+        return parseOptionalBoolean(payload.transcribe_recording);
+    }
+
+    if (payload.transcribeRecording !== undefined) {
+        return parseOptionalBoolean(payload.transcribeRecording);
+    }
+
+    if (payload.transcriptionEnabled !== undefined) {
+        return parseOptionalBoolean(payload.transcriptionEnabled);
+    }
+
+    return null;
+}
+
 class CallRecording {
     constructor(options = {}) {
         this.enabled = env.callRecordingEnabled !== false;
+        this.transcriptionEnabled = resolveTranscribeRecording(options) === true;
         this.sessionId = options.sessionId || "";
         this.callId = options.callId || "";
         this.tenant = options.tenant || null;
@@ -273,7 +320,7 @@ class CallRecording {
         }
 
         let transcriptSegments = [];
-        if (env.callRecordingTranscribe && env.openaiApiKey) {
+        if (this.shouldTranscribeRecording()) {
             try {
                 transcriptSegments = await Promise.race([
                     this.resolveTranscriptSegments(customerPcm, agentPcm),
@@ -316,10 +363,22 @@ class CallRecording {
         };
     }
 
+    setTranscriptionEnabled(value) {
+        const parsed = parseOptionalBoolean(value);
+
+        if (parsed !== null) {
+            this.transcriptionEnabled = parsed;
+        }
+    }
+
+    shouldTranscribeRecording() {
+        return Boolean(this.transcriptionEnabled && env.callRecordingTranscribe && env.openaiApiKey);
+    }
+
     async resolveTranscriptSegments(customerPcm, agentPcm) {
         const segments = [];
 
-        if (env.callRecordingTranscribe) {
+        if (this.shouldTranscribeRecording()) {
             segments.push(...await this.transcribeSource("customer", customerPcm));
             segments.push(...await this.transcribeSource("agent", agentPcm));
         }
@@ -780,4 +839,5 @@ function encodeMp3IfAvailable(wavPath, mp3Path) {
 
 module.exports = {
     CallRecording,
+    resolveTranscribeRecording,
 };

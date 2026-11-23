@@ -43,8 +43,10 @@ class HumanBridgeCallSession {
             baseUrl: this.baseUrl,
             mode: payload.mode || "human_bridge",
             transcribeRecording: resolveTranscribeRecording(payload),
+            deferredStart: true,
             logger: (message, data) => this.log(message, data),
         });
+        this.isRecordingStarted = false;
         this.waitMessage = normalizeWaitMessage(payload.wait_message);
         this.waitAudioUrl = payload.wait_audio_url ? String(payload.wait_audio_url).trim() : "";
         this.waitToneEnabled = payload.wait_tone_enabled !== false;
@@ -121,7 +123,6 @@ class HumanBridgeCallSession {
             silenceLogEveryFrames: env.callSilenceLogEveryFrames,
             logAudioChunks: env.callAudioDebug,
             logger: (message, data) => this.log(message, data),
-            onAudioFrame: (frame, metadata) => this.recording.recordAgentPcm(frame, metadata),
         });
         this.metaOutboundTrack = this.metaAudioSource.createTrack();
 
@@ -165,7 +166,9 @@ class HumanBridgeCallSession {
             this.lastMetaFrameAt = Date.now();
             this.metaDisconnectedSince = null;
             this.markActivity("meta_audio");
-            this.recording.recordCustomerData(data);
+            if (this.isRecordingStarted) {
+                this.recording.recordCustomerData(data);
+            }
 
             if (this.agentAudioSource) {
                 this.agentAudioSource.onData(data);
@@ -383,6 +386,19 @@ class HumanBridgeCallSession {
         }
     }
 
+    startCallRecording(trigger = "agent_connected") {
+        if (this.closedAt || this.isRecordingStarted) {
+            return;
+        }
+
+        this.isRecordingStarted = true;
+        this.recording.startConversation();
+        this.log("human bridge call recording started", {
+            trigger,
+            active_agent_id: this.activeAgentId,
+        });
+    }
+
     async connectAgent(agentOfferSdp, options = {}) {
         agentOfferSdp = normalizeRemoteSdp(agentOfferSdp);
 
@@ -450,6 +466,7 @@ class HumanBridgeCallSession {
 
         this.status = "agent_connected";
         this.stopWaitingPlayback("agent_peer_connected");
+        this.startCallRecording("agent_peer_connected");
         this.markActivity("agent_answer_ready");
         this.log("human bridge agent answer_sdp ready", {
             agent_id: this.activeAgentId,
@@ -479,6 +496,7 @@ class HumanBridgeCallSession {
 
             this.agentFramesReceived += 1;
             this.stopWaitingPlayback("agent_audio");
+            this.startCallRecording("agent_audio");
             this.markActivity("agent_audio");
             this.recording.recordAgentData(data);
 
@@ -508,6 +526,7 @@ class HumanBridgeCallSession {
         this.activeAgentId = options.agentId || options.agent_id || this.activeAgentId;
         this.status = "agent_ws_connected";
         this.stopWaitingPlayback("agent_ws_connected");
+        this.startCallRecording("agent_ws_connected");
         this.markActivity("agent_ws_connected");
         this.log("human bridge agent websocket connected", {
             agent_id: this.activeAgentId,
@@ -535,6 +554,7 @@ class HumanBridgeCallSession {
             this.agentFramesReceived += 1;
             this.agentWsFramesReceived += 1;
             this.stopWaitingPlayback("agent_ws_audio");
+            this.startCallRecording("agent_ws_audio");
             this.markActivity("agent_ws_audio");
 
             if (this.agentWsFramesReceived === 1 || this.agentWsFramesReceived % 250 === 0) {

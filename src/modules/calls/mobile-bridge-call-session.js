@@ -29,8 +29,10 @@ class MobileBridgeCallSession {
             baseUrl: this.baseUrl,
             mode: payload.mode || "mobile_bridge",
             transcribeRecording: resolveTranscribeRecording(payload),
+            deferredStart: true,
             logger: (message, data) => this.log(message, data),
         });
+        this.isRecordingStarted = false;
         this.createdAt = new Date();
         this.closedAt = null;
         this.status = "created";
@@ -127,7 +129,9 @@ class MobileBridgeCallSession {
 
             this.metaFramesReceived += 1;
             this.markActivity("meta_audio");
-            this.recording.recordCustomerData(data);
+            if (this.isRecordingStarted) {
+                this.recording.recordCustomerData(data);
+            }
 
             this.sendMetaAudioToMobileWebSocket(data);
         };
@@ -143,6 +147,19 @@ class MobileBridgeCallSession {
                 console.error("Error closing mobile bridge on meta track end", error);
             });
         };
+    }
+
+    startCallRecording(trigger = "mobile_connected") {
+        if (this.closedAt || this.isRecordingStarted) {
+            return;
+        }
+
+        this.isRecordingStarted = true;
+        this.recording.startConversation();
+        this.log("mobile bridge call recording started", {
+            trigger,
+            active_agent_id: this.activeAgentId,
+        });
     }
 
     attachMobileWebSocket(ws, options = {}) {
@@ -163,6 +180,7 @@ class MobileBridgeCallSession {
         this.activeAgentId = options.agentId || options.agent_id || this.agentId;
         this.status = "mobile_ws_connected";
         this.markActivity("mobile_ws_connected");
+        this.startCallRecording("mobile_ws_connected");
         this.log("mobile bridge websocket connected", {
             agent_id: this.activeAgentId,
         });
@@ -189,6 +207,7 @@ class MobileBridgeCallSession {
             this.mobileFramesReceived += 1;
             this.mobileWsFramesReceived += 1;
             this.markActivity("mobile_ws_audio");
+            this.startCallRecording("mobile_ws_audio");
 
             if (this.mobileWsFramesReceived === 1 || this.mobileWsFramesReceived % 250 === 0) {
                 this.log("mobile bridge websocket audio received", {

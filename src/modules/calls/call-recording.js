@@ -85,7 +85,9 @@ class CallRecording {
         this.baseUrl = options.baseUrl || "";
         this.mode = options.mode || "voice";
         this.logger = options.logger || null;
-        this.startedAt = new Date();
+        this.deferredStart = Boolean(options.deferredStart);
+        this.conversationStarted = !this.deferredStart;
+        this.startedAt = this.conversationStarted ? new Date() : null;
         this.closedAt = null;
         this.finalized = false;
         this.rawDir = path.join(env.ttsOutputDir, "recordings");
@@ -107,6 +109,18 @@ class CallRecording {
             frames: 0,
             audioBytes: 0,
         };
+    }
+
+    startConversation(startedAt = new Date()) {
+        if (this.conversationStarted || this.finalized) {
+            return;
+        }
+
+        this.conversationStarted = true;
+        this.startedAt = startedAt;
+        this.log("call recording conversation started", {
+            started_at: this.startedAt.toISOString(),
+        });
     }
 
     recordCustomerData(data) {
@@ -185,7 +199,7 @@ class CallRecording {
     }
 
     recordPcm(source, pcmBuffer, options = {}) {
-        if (!this.enabled || this.finalized || !pcmBuffer || !pcmBuffer.length) {
+        if (!this.enabled || !this.conversationStarted || this.finalized || !pcmBuffer || !pcmBuffer.length) {
             return;
         }
 
@@ -241,6 +255,16 @@ class CallRecording {
 
     async finalize(reason = "closed") {
         if (!this.enabled || this.finalized) {
+            return null;
+        }
+
+        if (this.deferredStart && !this.conversationStarted) {
+            this.finalized = true;
+            this.closedAt = new Date();
+            this.log("call recording finalize skipped (conversation was not started)", {
+                reason,
+            });
+            await this.cleanupRawFiles().catch(() => {});
             return null;
         }
 
@@ -344,7 +368,7 @@ class CallRecording {
             mimeType,
             sizeBytes: finalSizeBytes,
             durationSeconds,
-            startedAt: this.startedAt.toISOString(),
+            startedAt: this.startedAt ? this.startedAt.toISOString() : (this.closedAt || new Date()).toISOString(),
             endedAt: this.closedAt.toISOString(),
             reason,
             transcriptSegments,
@@ -525,6 +549,9 @@ class CallRecording {
     }
 
     elapsedMs() {
+        if (!this.startedAt) {
+            return 0;
+        }
         return Math.max(0, Date.now() - this.startedAt.getTime());
     }
 

@@ -9,4 +9,8 @@ tmp/
 *.wav
 *.mp3
 *.pcm
+*.bak
 .DS_Store
+docker-compose.override.yml
+docker-compose.yml.bak*
+/nginx/

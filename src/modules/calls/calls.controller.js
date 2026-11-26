@@ -12,19 +12,29 @@ function getBaseUrl(req) {
 
 async function createSession(req, res, next) {
     try {
-        const { session, answerSdp } = await callSessionManager.createSession(
+        const { session, answerSdp, fallback, warning } = await callSessionManager.createSession(
             req.body,
             {
                 baseUrl: getBaseUrl(req),
             }
         );
 
+        const data = {
+            session_id: session.sessionId,
+            answer_sdp: answerSdp,
+        };
+
+        if (fallback) {
+            data.fallback = fallback;
+        }
+
+        if (warning) {
+            data.warning = warning;
+        }
+
         res.json({
             ok: true,
-            data: {
-                session_id: session.sessionId,
-                answer_sdp: answerSdp,
-            },
+            data,
         });
     } catch (error) {
         next(error);

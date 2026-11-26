@@ -8,6 +8,7 @@ const OutboundMobileBridgeCallSession = require("./outbound-mobile-bridge-call-s
 const HumanBridgeCallSession = require("./human-bridge-call-session");
 const MobileBridgeCallSession = require("./mobile-bridge-call-session");
 const InternalWebRtcBridgeSession = require("./internal-webrtc-bridge-session");
+const { classifyVoiceError } = require("./voice-error.util");
 
 const sessions = new Map();
 const sessionsByCallId = new Map();
@@ -89,10 +90,13 @@ async function createSession(payload, options = {}) {
         sessions.set(sessionId, fallbackSession);
         sessionsByCallId.set(payload.call_id, sessionId);
 
+        const warning = classifyVoiceError(error, "realtime_start");
+
         return {
             session: fallbackSession,
             answerSdp,
             fallback: "legacy_v1",
+            warning,
         };
     }
 

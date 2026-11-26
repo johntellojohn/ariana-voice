@@ -10,6 +10,7 @@ const { CallRecording, resolveTranscribeRecording } = require("./call-recording"
 const { SpeechInterruptionGate } = require("./speech-interruption-gate");
 const { int16ArrayToBuffer } = require("./wav.util");
 const { normalizeTtsConfig, toTtsVoice } = require("./voice-profile");
+const { classifyVoiceError, reportCallErrorToLaravel } = require("./voice-error.util");
 
 const { RTCAudioSink, RTCAudioSource } = wrtc.nonstandard;
 const REALTIME_SAMPLE_RATE = 24000;
@@ -87,6 +88,7 @@ class RealtimeCallSession {
         this.sequence = 0;
         this.inputSpeechFrames = [];
         this.lastInputLevel = 0;
+        this.reportedErrorCodes = new Set();
         this.interruptionGate = new SpeechInterruptionGate({
             debounceMs: this.interruptionDebounceMs(),
             onInterrupt: (reason) => this.handleInterruption(reason),
@@ -751,6 +753,9 @@ class RealtimeCallSession {
                 this.log("realtime event error", {
                     error: event.error || event,
                 });
+                if (!this.closedAt && this.status !== "starting" && !this.realtimeClosedForHumanTransfer) {
+                    this.reportVoiceError(event.error || event, "realtime_event");
+                }
                 break;
             default:
                 break;
@@ -1320,6 +1325,30 @@ class RealtimeCallSession {
                 event: event.type,
             }
         );
+    }
+
+    reportVoiceError(error, stage = "realtime") {
+        if (!this.callbackUrl || this.closedAt) {
+            return;
+        }
+
+        const classified = classifyVoiceError(error, stage);
+        const dedupeKey = `${classified.code}:${classified.stage}`;
+
+        if (this.reportedErrorCodes.has(dedupeKey)) {
+            return;
+        }
+
+        this.reportedErrorCodes.add(dedupeKey);
+        reportCallErrorToLaravel({
+            callbackUrl: this.callbackUrl,
+            sessionId: this.sessionId,
+            callId: this.callId,
+            tenant: this.tenant,
+            agentId: this.agentId,
+            error: classified,
+            stage: classified.stage,
+        });
     }
 
     async sendCallback(payload) {

@@ -11,6 +11,7 @@ const { AudioOutput } = require("./audio-output");
 const { CallRecording, resolveTranscribeRecording } = require("./call-recording");
 const { createWavBuffer } = require("./wav.util");
 const { normalizeTtsConfig, toTtsVoice } = require("./voice-profile");
+const { classifyVoiceError, reportCallErrorToLaravel } = require("./voice-error.util");
 
 const { RTCAudioSink, RTCAudioSource } = wrtc.nonstandard;
 
@@ -42,6 +43,7 @@ class CallSession {
         this.initialGreetingPlayed = false;
         this.tts = normalizeTtsConfig(payload.tts);
         this.language = resolveCallLanguage(payload.language);
+        this.reportedErrorCodes = new Set();
         this.createdAt = new Date();
         this.closedAt = null;
         this.lastActivityAt = Date.now();
@@ -231,6 +233,7 @@ class CallSession {
             this.turnQueue.push(turn);
             this.processTurnQueue().catch((error) => {
                 console.error("Error processing call turn", error);
+                this.reportVoiceError(error, "stt_turn");
             });
         }
     }
@@ -417,6 +420,7 @@ class CallSession {
                 reason,
                 error: error.message,
             });
+            this.reportVoiceError(error, "tts_greeting");
 
             return false;
         } finally {
@@ -461,6 +465,30 @@ class CallSession {
             stopped: playback.stopped,
             connection_state: this.pc ? this.pc.connectionState : null,
             ice_connection_state: this.pc ? this.pc.iceConnectionState : null,
+        });
+    }
+
+    reportVoiceError(error, stage = "legacy_v1") {
+        if (!this.callbackUrl || this.closedAt) {
+            return;
+        }
+
+        const classified = classifyVoiceError(error, stage);
+        const dedupeKey = `${classified.code}:${classified.stage}`;
+
+        if (this.reportedErrorCodes.has(dedupeKey)) {
+            return;
+        }
+
+        this.reportedErrorCodes.add(dedupeKey);
+        reportCallErrorToLaravel({
+            callbackUrl: this.callbackUrl,
+            sessionId: this.sessionId,
+            callId: this.callId,
+            tenant: this.tenant,
+            agentId: this.agentId,
+            error: classified,
+            stage: classified.stage,
         });
     }
 
